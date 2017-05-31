@@ -314,6 +314,22 @@ static bool in_bounds(unsigned long offset,
 	return 1;
 }
 
+/* Check offset + size <= bound.  1 if in bounds, 0 otherwise. */
+static bool in_bounds(unsigned long offset,
+		      unsigned long size,
+		      unsigned long bound)
+{
+	if (offset > bound || size > bound) {
+		pr_err("%s: %lu or %lu > %lu\n", __func__, offset, size, bound);
+		return 0;
+	}
+	if (offset > (bound - size)) {
+		pr_err("%s: %lu > %lu - %lu\n", __func__, offset, size, bound);
+		return 0;
+	}
+	return 1;
+}
+
 static unsigned int extract_uint(const unsigned char *ptr)
 {
 	return (unsigned int)ptr[0] +
@@ -2075,9 +2091,6 @@ static ssize_t fwu_sysfs_image_size_store(struct device *dev,
 	retval = kstrtoul(buf, 10, &size);
 	if (retval)
 		return retval;
-
-	if (!mutex_trylock(&fwu_sysfs_mutex))
-		return -EBUSY;
 
 	fwu->full_update_size = size;
 	fwu->image_size = size;

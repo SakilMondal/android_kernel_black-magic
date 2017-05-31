@@ -325,6 +325,22 @@ module_param(ssr_panic, charp, 0644);
 #define MAX_SSR_REASON_LEN (128)
 static char *ssr_reason = NULL;
 
+#if defined(ASUS_ZC550KL8916_PROJECT)
+#define REASON_EXCEPTION_A "0: task Exception detected"
+#define REASON_EXCEPTION_B "##3424*9"
+#define DEFAULT_TURBO_TARGET_COUNT 2
+#define DEFAULT_TURBO_REQUIRE_RESET_TIME 14*24*60*60 //14 days
+static uint32_t modem_exception0_flag = 0;
+static unsigned long first_exception0_time = 0;
+static int get_current_time(unsigned long *now_tm_sec);
+#endif
+
+//ASUS_BSP show_wang  +++ [ZC550KL][SSR][N/A][FIX] allow ssr when update mbn in factory mode
+#define REASON_EXCEPTION_C "qmi_pdc_svc.c"
+#define REASON_EXCEPTION_D "PSD_DEBUG: Modem get"
+#define REASON_EXCEPTION_E "finished, Trigger SSR"
+//ASUS_BSP show_wang  --- [ZC550KL][SSR][N/A][FIX] allow ssr when update mbn in factory mode
+
 module_param(ssr_reason, charp, 0444);
 
 void subsys_save_reason(char *name, char *reason)
@@ -939,6 +955,7 @@ int subsystem_restart_dev(struct subsys_device *dev)
 {
 	const char *name;
 
+	int restart_level_temp = 0;//ASUS_BSP show_wang [ZC550KL][SSR][N/A][FIX] allow ssr when update mbn in factory mode
 	if (!get_device(&dev->dev))
 		return -ENODEV;
 
@@ -976,8 +993,20 @@ int subsystem_restart_dev(struct subsys_device *dev)
 * 1.Record crash count.
 * 2.Reboot device directly.
 * */
-#if 0
-#if defined(CONFIG_ASUS_ZC550KL8916_PROJECT)
+//ASUS_BSP show_wang  +++ [ZC550KL][SSR][N/A][FIX] allow ssr when update mbn in factory mode
+	restart_level_temp = dev->restart_level;
+	if ( g_ASUS_bootmode != CHARGER_SHIPPING_MODE &&
+			g_ASUS_bootmode != SHIPPING_MODE ) {
+		if (strstr(ssr_reason, REASON_EXCEPTION_C) != NULL &&
+				strstr(ssr_reason, REASON_EXCEPTION_D) != NULL &&
+				strstr(ssr_reason, REASON_EXCEPTION_E) != NULL) {
+			printk("%s ssr_reason is %s \n", __func__, ssr_reason);
+			restart_level_temp = RESET_SUBSYS_COUPLED;
+		}
+	}
+//ASUS_BSP show_wang  --- [ZC550KL][SSR][N/A][FIX] allow ssr when update mbn in factory mode
+
+#if defined(ASUS_ZC550KL8916_PROJECT)
 	if (strstr(ssr_reason, REASON_EXCEPTION_A) != NULL ||
 			strstr(ssr_reason, REASON_EXCEPTION_B) != NULL)
 	{
@@ -988,22 +1017,41 @@ int subsystem_restart_dev(struct subsys_device *dev)
 		//return 0;
 	}
 #endif
-//ASUS_BSP Ken_Gan --- [ZC550KL][SSR][N/A][MODIFY]workaround for Exception 0
-#endif
 
-	switch (dev->restart_level) {
+//ASUS_BSP show_wang  +++ [ZC550KL][SSR][N/A][FIX] allow ssr when update mbn in factory mode
+	if ( g_ASUS_bootmode != CHARGER_SHIPPING_MODE &&
+			g_ASUS_bootmode != SHIPPING_MODE ) {
+	switch (restart_level_temp) {
 
-	case RESET_SUBSYS_COUPLED:
-		__subsystem_restart_dev(dev);
-		break;
-	case RESET_SOC:
-		__pm_stay_awake(&dev->ssr_wlock);
-		schedule_work(&dev->device_restart_work);
-		return 0;
-	default:
-		panic("subsys-restart: Unknown restart level!\n");
-		break;
+		case RESET_SUBSYS_COUPLED:
+			printk("%s RESET_SUBSYS_COUPLED\n", __func__);
+			__subsystem_restart_dev(dev);
+			break;
+		case RESET_SOC:
+			__pm_stay_awake(&dev->ssr_wlock);
+			schedule_work(&dev->device_restart_work);
+			return 0;
+		default:
+			panic("subsys-restart: Unknown restart level!\n");
+			break;
+		}
+	} else {
+		switch (dev->restart_level) {
+
+		case RESET_SUBSYS_COUPLED:
+			__subsystem_restart_dev(dev);
+			break;
+		case RESET_SOC:
+			__pm_stay_awake(&dev->ssr_wlock);
+			schedule_work(&dev->device_restart_work);
+			return 0;
+		default:
+			panic("subsys-restart: Unknown restart level!\n");
+			break;
+		}
 	}
+//ASUS_BSP show_wang  --- [ZC550KL][SSR][N/A][FIX] allow ssr when update mbn in factory mode
+
 	module_put(dev->owner);
 	put_device(&dev->dev);
 
