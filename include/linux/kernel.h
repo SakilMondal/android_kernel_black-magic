@@ -19,6 +19,24 @@
 extern int g_ASUS_laserID;
 //---- sean_lu@asus.com add "support laser sensor 2nd source"
 
+// ASUS ZC550KL CHANGES //
+
+// +++ ASUS_BSP : add for boot mode
+enum BOOT_MODE
+{
+	//ZC550KL
+	USER_MODE = 0x0,
+	SHIPPING_MODE = 0x1,
+	FFBM_MODE = 0x2,
+	CHARGER_FACTORY_MODE = 0x3,
+	CHARGER_SHIPPING_MODE = 0x4,
+	BOOTMODE_UNKNOWN = 0xFF
+};
+extern enum BOOT_MODE g_ASUS_bootmode;
+// --- ASUS_BSP : add for boot mode
+
+extern enum BOOT_MODE g_ASUS_bootmode;
+
 #define USHRT_MAX	((u16)(~0U))
 #define SHRT_MAX	((s16)(USHRT_MAX>>1))
 #define SHRT_MIN	((s16)(-SHRT_MAX - 1))

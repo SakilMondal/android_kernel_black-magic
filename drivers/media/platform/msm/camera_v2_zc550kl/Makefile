@@ -1,0 +1,20 @@
+ccflags-y += -Idrivers/media/platform/msm/camera_v2_zc550kl
+ccflags-y += -Idrivers/media/platform/msm/camera_v2_zc550kl/sensor
+ccflags-y += -Idrivers/media/platform/msm/camera_v2_zc550kl/codecs
+ccflags-y += -Idrivers/media/platform/msm/camera_v2_zc550kl/isps
+ccflags-y += -Idrivers/media/platform/msm/camera_v2_zc550kl/pproc
+ccflags-y += -Idrivers/media/platform/msm/camera_v2_zc550kl/msm_vb2
+ccflags-y += -Idrivers/media/platform/msm/camera_v2_zc550kl/camera
+ccflags-y += -Idrivers/media/platform/msm/camera_v2_zc550kl/jpeg_10
+ccflags-y += -Idrivers/media/platform/msm/camera_v2_zc550kl/fd
+
+obj-$(CONFIG_MSMB_CAMERA) += msm.o
+obj-$(CONFIG_MSMB_CAMERA) += camera/
+obj-$(CONFIG_MSMB_CAMERA) += msm_vb2/
+obj-$(CONFIG_MSMB_CAMERA) += sensor/
+obj-$(CONFIG_MSMB_CAMERA) += pproc/
+obj-$(CONFIG_MSMB_CAMERA) += isp/
+obj-$(CONFIG_MSMB_CAMERA) += ispif/
+obj-$(CONFIG_MSMB_JPEG) += jpeg_10/
+obj-$(CONFIG_MSMB_CAMERA) += msm_buf_mgr/
+obj-$(CONFIG_MSM_FD) += fd/

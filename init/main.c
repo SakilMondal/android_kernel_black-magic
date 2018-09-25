@@ -325,6 +325,52 @@ static int get_boot_charger(char *str)
 __setup("androidboot.mode=", get_boot_charger);
 //<ASUS-Lotta_Lu-20150317> Add for charger mode BuleScreen --
 
+// ASUS ZC550KL CHANGES //
+//+++ ASUS_BSP : Younger
+enum BOOT_MODE g_ASUS_bootmode=BOOTMODE_UNKNOWN;
+
+EXPORT_SYMBOL(g_ASUS_bootmode);
+
+ static int set_boot_mode(char *str)
+ {
+
+	if (!strncmp(str,"user",4) )
+	{
+		g_ASUS_bootmode = USER_MODE;
+		printk("androidboot.mode=user\n");
+	}
+	else if(!strncmp(str,"ffbm-",5))
+	{
+		g_ASUS_bootmode = FFBM_MODE;
+		printk("androidboot.mode=ffbm-01\n");
+	}
+	else if(!strncmp(str,"shipping",8))
+	{
+		g_ASUS_bootmode = SHIPPING_MODE;
+		printk("androidboot.mode=shipping\n");
+	}
+	else if(!strncmp(str,"charger_factory",15))
+	{
+		g_ASUS_bootmode = CHARGER_FACTORY_MODE;
+		printk("androidboot.mode=charger_factory\n");
+	}
+	else if(!strncmp(str,"charger_shipping",16))
+	{
+		g_ASUS_bootmode = CHARGER_SHIPPING_MODE;
+		printk("androidboot.mode=charger_shipping\n");
+	}
+	else
+	{
+		g_ASUS_bootmode = SHIPPING_MODE;
+		printk("androidboot.mode=shipping\n");
+	}
+	printk("g_ASUS_bootmode = %d\n", g_ASUS_bootmode);
+	return 0;
+}
+__setup("androidboot.mode=", set_boot_mode);
+//--- ASUS_BSP : Younger
+
+
 /*
  * If set, this is an indication to the drivers that reset the underlying
  * device before going ahead with the initialization otherwise driver might
