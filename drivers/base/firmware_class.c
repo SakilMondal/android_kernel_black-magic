@@ -293,7 +293,11 @@ static const char * const fw_path[] = {
 	"/lib/firmware/updates",
 	"/lib/firmware/" UTS_RELEASE,
 	"/lib/firmware",
+#ifdef CONFIG_ASUS_ZC550KL_PROJECT
+	// "/firmware/image" // better_ding, wcnss should be loading from /system/etc/firmware with signed firmware
+#else
 	"/firmware/image"
+#endif
 };
 
 /*
