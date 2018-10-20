@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -1160,7 +1160,6 @@ VOS_STATUS vos_nv_open(void)
     v_U32_t dataOffset;
     sHalNv *pnvData = NULL;
     hdd_context_t *pHddCtx = NULL;
-    static char *WLAN_NV_FILE = NULL;
 
     /*Get the global context */
     pVosContext = vos_get_global_context(VOS_MODULE_ID_SYS, NULL);
@@ -1168,30 +1167,6 @@ VOS_STATUS vos_nv_open(void)
     if (NULL == pVosContext)
     {
         return (eHAL_STATUS_FAILURE);
-    }
-
-    /* ze550kl and ze550kg have the same project id, but ze550kg only have 3G sku, and others belongs to ze550kl */
-    if (ASUS_ZE550KL == asus_PRJ_ID) {
-        /* RF SKU US:2 3G:3 TW:4 WW:5 CUCC:6 CMCC:7 */
-        if (0 == strncmp(asus_project_RFsku, "3", 2))
-            WLAN_NV_FILE = ZE550KG_WLAN_NV_FILE;
-        else if (0 == strncmp(asus_project_RFsku, "7", 2))
-            WLAN_NV_FILE = ZE550KL_CMCC_WLAN_NV_FILE;
-        /* ze551kl_US is LTE and FHD */
-        else if ((0 == strncmp(asus_project_lte, "1", 2)) && (0 == strncmp(asus_project_hd, "0", 2)) && (0 == strncmp(asus_project_RFsku, "2", 2)))
-            WLAN_NV_FILE = ZE551KL_WLAN_NV_FILE;
-        else
-            WLAN_NV_FILE = ZE550KL_WLAN_NV_FILE;
-    }
-    else if (ASUS_ZE600KL == asus_PRJ_ID)
-        WLAN_NV_FILE = ZE600KL_WLAN_NV_FILE;
-    else if (ASUS_ZX550KL == asus_PRJ_ID)
-        WLAN_NV_FILE = ZX550KL_WLAN_NV_FILE;
-    else if (ASUS_ZD550KL == asus_PRJ_ID) {
-        if (0 == strncmp(asus_project_RFsku, "7", 2))
-            WLAN_NV_FILE = ZD550KL_CMCC_WLAN_NV_FILE;
-        else
-            WLAN_NV_FILE = ZD550KL_CUCC_WLAN_NV_FILE;
     }
 
     status = hdd_request_firmware(WLAN_NV_FILE,
@@ -1785,7 +1760,7 @@ VOS_STATUS vos_nv_readMultiMacAddress( v_U8_t *pMacAddress,
       (NULL == pMacAddress))
    {
       VOS_TRACE( VOS_MODULE_ID_VOSS, VOS_TRACE_LEVEL_ERROR,
-          " Invalid Parameter from NV Client macCount %d, pMacAddress %pK",
+          " Invalid Parameter from NV Client macCount %d, pMacAddress %p",
           macCount, pMacAddress);
    }
 
