@@ -40,6 +40,13 @@
 
 #define DRV_NAME "msm8x16-asoc-wcd"
 
+#ifdef CONFIG_ASUS_ZC550KL_PROJECT
+//mei_huang +++ config speaker
+int ext_spk_amp_gpio = -1;
+int speaker_run = 0;
+//mei_huang ---
+#endif
+
 #define BTSCO_RATE_8KHZ 8000
 #define BTSCO_RATE_16KHZ 16000
 #define MAX_SND_CARDS 2
@@ -295,6 +302,10 @@ struct cdc_pdm_pinctrl_info {
 	struct pinctrl_state *cdc_lines_act;
 	struct pinctrl_state *cross_conn_det_sus;
 	struct pinctrl_state *cross_conn_det_act;
+	#ifdef CONFIG_ASUS_ZC550KL_PROJECT
+	struct pinctrl_state *spk_amp_sus;//mei_huang +++ config speaker
+	struct pinctrl_state *spk_amp_act;//mei_huang +++ config speaker
+	#endif
 	//<asus-yusheng20150420 add for dual-speaker path+++>
 	struct pinctrl_state *quat_cdc_lines_sus;
 	struct pinctrl_state *quat_cdc_lines_act;
@@ -422,6 +433,9 @@ static struct snd_soc_dapm_route wcd9335_audio_paths[] = {
 static char const *rx_bit_format_text[] = {"S16_LE", "S24_LE"};
 static const char *const mi2s_tx_ch_text[] = {"One", "Two", "Three", "Four"};
 static const char *const loopback_mclk_text[] = {"DISABLE", "ENABLE"};
+#ifdef CONFIG_ASUS_ZC550KL_PROJECT
+static const char *const ext_spk_amp_text[] = {"DISABLE", "ENABLE"};//mei_huang +++ config speaker
+#endif
 static char const *pri_rx_sample_rate_text[] = {"KHZ_48", "KHZ_96",
 					"KHZ_192", "KHZ_8",
 					"KHZ_16", "KHZ_32"};
@@ -579,6 +593,64 @@ static int mi2s_rx_bit_format_put(struct snd_kcontrol *kcontrol,
 	}
 	return 0;
 }
+
+#ifdef CONFIG_ASUS_ZC550KL_PROJECT
+//mei_huang +++ config speaker
+static void msm8x16_ext_spk_power_amp_enable(u32 enable)
+{
+	if (enable) {
+		gpio_direction_output(ext_spk_amp_gpio, enable);
+		udelay(2);
+		gpio_direction_output(ext_spk_amp_gpio, !enable);
+		udelay(2);
+		gpio_direction_output(ext_spk_amp_gpio, enable);
+	} else {
+		gpio_direction_output(ext_spk_amp_gpio, enable);
+		mdelay(1);
+	}
+ 	pr_debug("%s: %s external speaker PAs.\n", __func__,
+		enable ? "Enable" : "Disable");
+}
+ static int ext_spk_amp_get(struct snd_kcontrol *kcontrol,
+	struct snd_ctl_elem_value *ucontrol)
+{
+	pr_debug("%s: ucontrol->value.integer.value[0] = %ld\n",
+		__func__, ucontrol->value.integer.value[0]);
+	return 0;
+}
+ static int ext_spk_amp_put(struct snd_kcontrol *kcontrol,
+	struct snd_ctl_elem_value *ucontrol)
+{
+	pr_debug("%s: ucontrol->value.integer.value[0] = %ld\n",
+		__func__, ucontrol->value.integer.value[0]);
+	switch (ucontrol->value.integer.value[0]) {
+		case 1:
+			if (ext_spk_amp_gpio >= 0) {
+				speaker_run = 1;
+				msm8x16_ext_spk_power_amp_enable(1);
+				pr_err("%s: Enabled 5V external supply for speaker\n",
+						__func__);
+			}
+			break;
+		
+		case 0:
+			if (ext_spk_amp_gpio >= 0) {
+				speaker_run = 0;
+				msm8x16_ext_spk_power_amp_enable(0);
+				pr_err("%s: Disabled 5V external supply for speaker\n",
+						__func__);
+			}
+			break;
+		
+		default:
+			pr_err("%s: Unexpected input value\n", __func__);
+			break;
+		
+	}
+	return 0;
+}
+//mei_huang ---
+#endif
 
 static int loopback_mclk_get(struct snd_kcontrol *kcontrol,
 	struct snd_ctl_elem_value *ucontrol)
@@ -1200,6 +1272,11 @@ static const struct soc_enum msm_snd_enum[] = {
 	SOC_ENUM_SINGLE_EXT(2, rx_bit_format_text),
 	SOC_ENUM_SINGLE_EXT(4, mi2s_tx_ch_text),
 	SOC_ENUM_SINGLE_EXT(2, loopback_mclk_text),
+	#ifdef CONFIG_ASUS_ZC550KL_PROJECT
+	//mei_huang +++ config speaker
+	SOC_ENUM_SINGLE_EXT(2, ext_spk_amp_text),
+	//mei_huang ---
+	#endif
 	SOC_ENUM_SINGLE_EXT(6, pri_rx_sample_rate_text),
 	SOC_ENUM_SINGLE_EXT(6, mi2s_tx_sample_rate_text),
 };
@@ -1219,6 +1296,12 @@ static const struct snd_kcontrol_new msm_snd_controls[] = {
 			msm_pri_mi2s_rx_ch_get, msm_pri_mi2s_rx_ch_put),
 	SOC_ENUM_EXT("Loopback MCLK", msm_snd_enum[2],
 			loopback_mclk_get, loopback_mclk_put),
+	#ifdef CONFIG_ASUS_ZC550KL_PROJECT
+	//mei_huang +++ config speaker
+	SOC_ENUM_EXT("ext spk amp", msm_snd_enum[3],
+			ext_spk_amp_get, ext_spk_amp_put),
+	//mei_huang ---
+	#endif
 	SOC_ENUM_EXT("Internal BTSCO SampleRate", msm_btsco_enum[0],
 		     msm_btsco_rate_get, msm_btsco_rate_put),
 	SOC_ENUM_EXT("RX SampleRate", msm_snd_enum[3],
@@ -2870,6 +2953,13 @@ static int msm8x16_setup_hs_jack(struct platform_device *pdev,
 			struct msm8916_asoc_mach_data *pdata)
 {
 	struct pinctrl *pinctrl;
+	#ifndef CONFIG_ASUS_ZC550KL_PROJECT
+	/* ASUS_BSP Paul +++ */
+	// g_gpio_audio_debug = of_get_named_gpio(pdev->dev.of_node, "AUDIO_DEBUG", 0);
+//	if (g_gpio_audio_debug < 0)
+//		printk("%s: property AUDIO_DEBUG not found\n", __func__);
+	/* ASUS_BSP Paul --- */
+	#else
 	/*steve_chen ++*/
 	g_gpio_audio_debug = of_get_named_gpio(pdev->dev.of_node,"AUDIO_DEBUG",0);
 	if(g_gpio_audio_debug < 0){
@@ -2878,6 +2968,7 @@ static int msm8x16_setup_hs_jack(struct platform_device *pdev,
 		pr_debug("%s: property Audio Debug = %d\n",__func__,g_gpio_audio_debug);
 	}
 	/*steve_chen --*/
+	#endif
 	pdata->us_euro_gpio = of_get_named_gpio(pdev->dev.of_node,
 					"qcom,cdc-us-euro-gpios", 0);
 	if (pdata->us_euro_gpio < 0) {
@@ -3498,6 +3589,52 @@ static int msm8x16_asoc_machine_probe(struct platform_device *pdev)
 		mbhc_cfg.hs_ext_micbias = false;
 	}
 
+	#ifdef CONFIG_ASUS_ZC550KL_PROJECT
+	{
+		//mei_huang +++ config speaker
+		ext_spk_amp_gpio = of_get_named_gpio(pdev->dev.of_node,
+			"spk_amp", 0);
+		pr_debug("%s: ext-spk-amp-gpio:%d.\n", __func__, ext_spk_amp_gpio);
+		
+		pinctrl_info.spk_amp_sus = pinctrl_lookup_state(pinctrl,
+			"spk_amp_sus");
+		if (IS_ERR(pinctrl_info.spk_amp_sus)) {
+			pr_err("%s: Unable to get spk_amp_sus pinctrl disable state handle\n",
+								__func__);
+			goto err;
+		}
+		
+		pinctrl_info.spk_amp_act = pinctrl_lookup_state(pinctrl,
+			"spk_amp_act");
+		if (IS_ERR(pinctrl_info.spk_amp_act)) {
+			pr_err("%s: Unable to get spk_amp_act pinctrl disable state handle\n",
+								__func__);
+			goto err;
+		} else {
+			pr_debug("%s: get spk_amp_act pinctrl\n", __func__);
+			ret = pinctrl_select_state(pinctrl,pinctrl_info.spk_amp_act);
+			if (ret < 0) {
+				pr_err("%s: failed to configure the gpio; ret=%d\n",
+						__func__, ret);
+			}
+		}
+		
+		if (ext_spk_amp_gpio >= 0) {
+			ret = gpio_request(ext_spk_amp_gpio, "spk_amp");
+			if (ret) {
+				pr_err("%s: gpio_request failed for ext_spk_amp_gpio ret:%d.\n",
+					__func__, ret);
+				goto err;
+			} else {
+				pr_debug("%s: gpio_request ext_spk_amp_gpio.\n",
+					__func__);
+				gpio_direction_output(ext_spk_amp_gpio, 0);
+			}
+		}
+	//mei_huang ---
+	}
+	#endif
+
 	/* initialize the mclk */
 	pdata->digital_cdc_clk.i2s_cfg_minor_version =
 					AFE_API_VERSION_I2S_CONFIG;
@@ -3570,6 +3707,14 @@ static int msm8x16_asoc_machine_probe(struct platform_device *pdev)
 
 	return 0;
 err:
+	#ifdef CONFIG_ASUS_ZC550KL_PROJECT
+	//mei_huang +++ config speaker
+	if (ext_spk_amp_gpio >= 0) {
+		gpio_free(ext_spk_amp_gpio);
+		ext_spk_amp_gpio = -1;
+	}
+	//mei_huang ---
+	#endif
 	if (pdata->vaddr_gpio_mux_spkr_ctl)
 		iounmap(pdata->vaddr_gpio_mux_spkr_ctl);
 	if (pdata->vaddr_gpio_mux_mic_ctl)
@@ -3594,12 +3739,23 @@ static int msm8x16_asoc_machine_remove(struct platform_device *pdev)
 	struct snd_soc_card *card = platform_get_drvdata(pdev);
 	struct msm8916_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
 
+	#ifdef CONFIG_ASUS_ZC550KL_PROJECT
+	//mei_huang +++ config speaker
+	if (ext_spk_amp_gpio >= 0)
+		gpio_free(ext_spk_amp_gpio);
+	//mei_huang ---
+	#endif
 	if (pdata->vaddr_gpio_mux_spkr_ctl)
 		iounmap(pdata->vaddr_gpio_mux_spkr_ctl);
 	if (pdata->vaddr_gpio_mux_mic_ctl)
 		iounmap(pdata->vaddr_gpio_mux_mic_ctl);
 	if (pdata->vaddr_gpio_mux_pcm_ctl)
 		iounmap(pdata->vaddr_gpio_mux_pcm_ctl);
+	#ifdef CONFIG_ASUS_ZC550KL_PROJECT
+	//mei_huang +++ config speaker
+	ext_spk_amp_gpio = -1;
+	//mei_huang ---
+	#endif
 	snd_soc_unregister_card(card);
 	mutex_destroy(&pdata->cdc_mclk_mutex);
 	return 0;

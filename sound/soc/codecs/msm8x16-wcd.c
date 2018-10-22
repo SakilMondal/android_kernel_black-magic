@@ -45,6 +45,12 @@
 #include "msm8916-wcd-irq.h"
 #include "msm8x16_wcd_registers.h"
 
+#ifdef CONFIG_ASUS_ZC550KL_PROJECT
+//mei_huang +++ enable speaker not need to enable mic
+extern int speaker_run;
+//mei_huang ---
+#endif
+
 /* steve_chen ++ */
 #include <linux/proc_fs.h>
 struct msm8x16_wcd_priv *g_msm8x16_wcd_priv;
@@ -4083,6 +4089,10 @@ static int msm8x16_wcd_hph_pa_event(struct snd_soc_dapm_widget *w,
 			msm8x16_notifier_call(codec,
 					WCD_EVENT_PRE_HPHL_PA_ON);
 		} else if (w->shift == 4) {
+#ifdef CONFIG_ASUS_ZC550KL_PROJECT
+		} else if (w->shift == 4)
+			if (speaker_run == 0) {
+#endif
 			snd_soc_update_bits(codec, MSM8X16_WCD_A_ANALOG_OUTPUT_VOLTAGE,0x1F, msm8x16_wcd->boost_voltage);
 			msm8x16_notifier_call(codec,
 					WCD_EVENT_PRE_HPHR_PA_ON);
@@ -4123,8 +4133,14 @@ static int msm8x16_wcd_hph_pa_event(struct snd_soc_dapm_widget *w,
 			snd_soc_update_bits(codec,
 				MSM8X16_WCD_A_ANALOG_RX_HPH_R_TEST, 0x04, 0x00);
 			msm8x16_wcd->mute_mask |= HPHR_PA_DISABLE;
+#ifdef CONFIG_ASUS_ZC550KL_PROJECT
+			if (speaker_run == 0) {
+#endif
 			msm8x16_notifier_call(codec,
 					WCD_EVENT_PRE_HPHR_PA_OFF);
+#ifdef CONFIG_ASUS_ZC550KL_PROJECT
+			}
+#endif
 		}
 		if (get_codec_version(msm8x16_wcd) >= CAJON) {
 			snd_soc_update_bits(codec,
@@ -4141,8 +4157,14 @@ static int msm8x16_wcd_hph_pa_event(struct snd_soc_dapm_widget *w,
 		} else if (w->shift == 4) {
 			clear_bit(WCD_MBHC_HPHR_PA_OFF_ACK,
 				&msm8x16_wcd->mbhc.hph_pa_dac_state);
+#ifdef CONFIG_ASUS_ZC550KL_PROJECT
+			if (speaker_run == 0) {
+#endif
 			msm8x16_notifier_call(codec,
 					WCD_EVENT_POST_HPHR_PA_OFF);
+#ifdef CONFIG_ASUS_ZC550KL_PROJECT
+			}
+#endif
 		}
 		usleep_range(4000, 4100);
 
@@ -4319,8 +4341,15 @@ static const struct snd_soc_dapm_route audio_map[] = {
 	{"MIC BIAS Internal2", NULL, "INT_LDO_H"},
 	{"MIC BIAS External", NULL, "INT_LDO_H"},
 	{"MIC BIAS External2", NULL, "INT_LDO_H"},
+	//mei_huang +++ power on micbias3
+	{"MIC BIAS Internal3", NULL, "INT_LDO_H"},
+	//mei_huang ---
 	{"MIC BIAS Internal1", NULL, "MICBIAS_REGULATOR"},
 	{"MIC BIAS Internal2", NULL, "MICBIAS_REGULATOR"},
+	{"MIC BIAS Internal2", NULL, "MICBIAS_REGULATOR"},
+	//mei_huang +++ power on micbias3
+	{"MIC BIAS Internal3", NULL, "MICBIAS_REGULATOR"},
+	//mei_huang ---
 	{"MIC BIAS External", NULL, "MICBIAS_REGULATOR"},
 	{"MIC BIAS External2", NULL, "MICBIAS_REGULATOR"},
 };
