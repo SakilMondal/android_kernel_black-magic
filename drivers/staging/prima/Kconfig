@@ -53,4 +53,8 @@ config ENABLE_LINUX_REG
 	bool "Enable linux regulatory feature"
 	default y
 
+config WLAN_OFFLOAD_PACKETS
+       bool "Enable offload packets feature"
+       default y
+
 endif # PRIMA_WLAN || PRONTO_WLAN
