@@ -688,10 +688,49 @@ ifeq ($(shell $(CONFIG_SHELL) $(srctree)/scripts/gcc-goto.sh $(CC)), y)
 	KBUILD_CFLAGS += -DCC_HAVE_ASM_GOTO
 endif
 
+ifneq ($(BUILD_NUMBER),)
+        KBUILD_CPPFLAGS += -DASUS_SW_VER=\"$(BUILD_NUMBER)\"
+else
+        KBUILD_CPPFLAGS += -DASUS_SW_VER=\"$(ASUS_BUILD_PROJECT)_ENG\"
+endif
+
+#ASUS_BSP Ander: ZC550KL support mutliple project build +++
+ifeq ($(ASUS_BUILD_PROJECT), ZC550KL)
+        KBUILD_CPPFLAGS += -DASUS_ZC550KL_PROJECT=1
+endif
+# ASUS_BSP Ander : ZC550KL support mutliple project build ---
+
+#ASUS_BSP ShowWang: ZC550KL support mutliple platform build +++
+ifeq ($(IS_BOARD_PLATFORM), 8939)
+        KBUILD_CPPFLAGS += -DASUS_ZC550KL8939_PROJECT=1
+endif
+# ASUS_BSP ShowWang : ZC550KL support mutliple platform build ---
+
+# ASUS_BSP : support ZC550KL_8916 build +++
+ifeq ($(IS_BOARD_PLATFORM), 8916)
+        KBUILD_CPPFLAGS += -DASUS_ZC550KL8916_PROJECT=1
+endif
+# ASUS_BSP : support ZC550KL_8916 build---
+
+# ASUS_BSP Ander: for userdebuf build
+ifeq ($(TARGET_BUILD_VARIANT), userdebug)
+        KBUILD_CPPFLAGS += -DASUS_USERDEBUG_BUILD=1
+#        KBUILD_CPPFLAGS += -DASUS_DOWNLOAD_MODE_DISABLE=1
+endif
+# ASUS_BSP Ander : for userdebug build
+
 # Add user supplied CPPFLAGS, AFLAGS and CFLAGS as the last assignments
 KBUILD_CPPFLAGS += $(KCPPFLAGS)
 KBUILD_AFLAGS += $(KAFLAGS)
 KBUILD_CFLAGS += $(KCFLAGS)
+ifneq ($(ASUS_FACTORY_BUILD),)
+KBUILD_CPPFLAGS += -DASUS_FACTORY_BUILD=1
+endif
+# jackson : add ASUS_SHIP_BUILD define for user build +++
+ifeq ($(TARGET_BUILD_VARIANT), user)
+KBUILD_CPPFLAGS += -DASUS_SHIP_BUILD=1
+endif
+# jackson : add ASUS_SHIP_BUILD define for user build ---
 
 # Use --build-id when available.
 LDFLAGS_BUILD_ID = $(patsubst -Wl$(comma)%,%,\

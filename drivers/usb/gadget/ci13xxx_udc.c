@@ -376,6 +376,11 @@ static int hw_device_reset(struct ci13xxx *udc)
 		return -ENODEV;
 	}
 
+//ASUS_BSP+++ LandiceFu "[ZE500KL][USBH][NA][spec] Support USB1.0/2.0 switch for factory test requirement"
+	if (udc->force_usb1)
+		hw_cwrite(CAP_PORTSC, PORTSC_PFSC, PORTSC_PFSC);
+//ASUS_BSP--- LandiceFu "[ZE500KL][USBH][NA][spec] Support USB1.0/2.0 switch for factory test requirement"
+
 	return 0;
 }
 
@@ -1749,6 +1754,51 @@ static ssize_t usb_remote_wakeup(struct device *dev,
 }
 static DEVICE_ATTR(wakeup, S_IWUSR, 0, usb_remote_wakeup);
 
+//ASUS_BSP+++ LandiceFu "[ZE500KL][USBH][NA][spec] Support USB1.0/2.0 switch for factory test requirement"
+#ifdef ASUS_FACTORY_BUILD
+static ssize_t show_force_port_speed(struct device *dev,
+			      struct device_attribute *attr, char *buf)
+{
+	unsigned int length;
+	struct ci13xxx *udc = container_of(dev, struct ci13xxx, gadget.dev);
+
+	length = scnprintf(buf, PAGE_SIZE, "%s\n", (udc->force_usb1==1) ? "USB1.X" : "USB2.0");
+
+	return length;
+}
+
+extern void penwell_force_udc_reset(void);
+
+static ssize_t store_force_port_speed(struct device *dev,
+			       struct device_attribute *attr,
+			       const char *buf, size_t count)
+{
+	struct ci13xxx *udc = container_of(dev, struct ci13xxx, gadget.dev);
+
+	int value;
+
+	if (attr == NULL || buf == NULL) {
+		dev_err(dev, "[%s] EINVAL\n", __func__);
+		goto done;
+	}
+
+	sscanf(buf, "%d", &value);
+	if (value == 1) {
+		udc->force_usb1 = 1;
+		printk("[usb_otg] switch to USB 1.0\n");
+	} else {
+		udc->force_usb1 = 0;
+		printk("[usb_otg] switch to USB 2.0\n");
+	}
+
+	penwell_force_udc_reset();
+done:
+	return count;
+}
+static DEVICE_ATTR(force_port_speed, S_IRUGO | S_IWUSR | S_IWGRP, show_force_port_speed, store_force_port_speed);
+#endif
+//ASUS_BSP--- LandiceFu "[ZE500KL][USBH][NA][spec] Support USB1.0/2.0 switch for factory test requirement"
+
 /**
  * dbg_create_files: initializes the attribute interface
  * @dev: device
@@ -1785,6 +1835,13 @@ __maybe_unused static int dbg_create_files(struct device *dev)
 	retval = device_create_file(dev, &dev_attr_requests);
 	if (retval)
 		goto rm_registers;
+//ASUS_BSP+++ LandiceFu "[ZE500KL][USBH][NA][spec] Support USB1.0/2.0 switch for factory test requirement"
+#ifdef ASUS_FACTORY_BUILD
+	retval = device_create_file(dev, &dev_attr_force_port_speed);
+	if (retval)
+		goto rm_requests;
+#endif
+//ASUS_BSP--- LandiceFu "[ZE500KL][USBH][NA][spec] Support USB1.0/2.0 switch for factory test requirement"
 	retval = device_create_file(dev, &dev_attr_wakeup);
 	if (retval)
 		goto rm_remote_wakeup;
@@ -1803,6 +1860,12 @@ rm_prime:
 	device_remove_file(dev, &dev_attr_prime);
 rm_remote_wakeup:
 	device_remove_file(dev, &dev_attr_wakeup);
+//ASUS_BSP+++ LandiceFu "[ZE500KL][USBH][NA][spec] Support USB1.0/2.0 switch for factory test requirement"
+#ifdef ASUS_FACTORY_BUILD
+rm_requests:
+	device_remove_file(dev, &dev_attr_requests);
+#endif
+//ASUS_BSP--- LandiceFu "[ZE500KL][USBH][NA][spec] Support USB1.0/2.0 switch for factory test requirement"
  rm_registers:
 	device_remove_file(dev, &dev_attr_registers);
  rm_qheads:
@@ -1831,6 +1894,9 @@ __maybe_unused static int dbg_remove_files(struct device *dev)
 {
 	if (dev == NULL)
 		return -EINVAL;
+#ifdef ASUS_FACTORY_BUILD
+	device_remove_file(dev, &dev_attr_force_port_speed);
+#endif
 	device_remove_file(dev, &dev_attr_requests);
 	device_remove_file(dev, &dev_attr_registers);
 	device_remove_file(dev, &dev_attr_qheads);
@@ -2237,13 +2303,16 @@ static int _hardware_dequeue(struct ci13xxx_ep *mEp, struct ci13xxx_req *mReq)
 	}
 
 	mReq->req.status = mReq->ptr->token & TD_STATUS;
-	if ((TD_STATUS_HALTED & mReq->req.status) != 0)
+	if ((TD_STATUS_HALTED & mReq->req.status) != 0){
+		printk("[usb] TD_STATUS_HALTED\n");
 		mReq->req.status = -1;
-	else if ((TD_STATUS_DT_ERR & mReq->req.status) != 0)
+	} else if ((TD_STATUS_DT_ERR & mReq->req.status) != 0) {
+		printk("[usb] TD_STATUS_DT_ERR\n");
 		mReq->req.status = -1;
-	else if ((TD_STATUS_TR_ERR & mReq->req.status) != 0)
+	} else if ((TD_STATUS_TR_ERR & mReq->req.status) != 0) {
+		printk("[usb] TD_STATUS_TR_ERR\n");
 		mReq->req.status = -1;
-
+	}
 	mReq->req.actual   = mReq->ptr->token & TD_TOTAL_BYTES;
 	mReq->req.actual >>= ffs_nr(TD_TOTAL_BYTES);
 	mReq->req.actual   = mReq->req.length - mReq->req.actual;
@@ -3887,10 +3956,12 @@ static irqreturn_t udc_irq(void)
 				pr_info("%s: USB reset interrupt is delayed\n",
 								__func__);
 			isr_reset_handler(udc);
+			printk("[usb] BUS RESET.\n");
 		}
 		if (USBi_PCI & intr) {
 			isr_statistics.pci++;
 			isr_resume_handler(udc);
+			printk("[usb] BUS RESUME.\n");
 		}
 		if (USBi_UEI & intr)
 			isr_statistics.uei++;
@@ -3900,6 +3971,7 @@ static irqreturn_t udc_irq(void)
 			isr_tr_complete_handler(udc);
 		}
 		if (USBi_SLI & intr) {
+			printk("[usb] BUS SUSPEND.\n");
 			isr_suspend_handler(udc);
 			isr_statistics.sli++;
 		}

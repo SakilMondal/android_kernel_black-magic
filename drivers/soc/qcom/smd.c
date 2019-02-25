@@ -47,6 +47,9 @@
 
 #include "smd_private.h"
 #include "smem_private.h"
+#ifdef ASUS_ZC550KL_PROJECT
+#include <linux/oem_functions.h>//asus-bsp-jeewu read sku_id+++
+#endif
 
 #define SMSM_SNAPSHOT_CNT 64
 #define SMSM_SNAPSHOT_SIZE ((SMSM_NUM_ENTRIES + 1) * 4 + sizeof(uint64_t))
@@ -59,6 +62,11 @@ uint32_t SMSM_NUM_HOSTS = 3;
 
 /* Legacy SMSM interrupt notifications */
 #define LEGACY_MODEM_SMSM_MASK (SMSM_RESET | SMSM_INIT | SMSM_SMDINIT)
+
+#ifdef ASUS_ZC550KL_PROJECT
+static int modemsku = 0;//asus-bsp-jeewu read sku_id+++
+module_param(modemsku, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);//asus-bsp-jeewu read sku_id+++
+#endif
 
 struct smsm_shared_info {
 	uint32_t *state;
@@ -471,6 +479,100 @@ static inline void notify_rpm_smd(smd_channel_t *ch)
 	}
 }
 
+/*ASUS-BBSP log SMD wake up packet+++*/
+#define QMI_RX_SVC_INDEX 4
+#define QMI_RX_TYPE_INDEX 6
+#define QMI_RX_MSG_INDEX 9
+static bool is_smsm_pm_suspend = false;
+
+struct smd_qmi_ch_type {
+	const char *name;
+	unsigned n;
+};
+
+static struct smd_qmi_ch_type smd_qmi_ch_tab[] = {
+	{ "DATA5_CNTL", -1},
+	{ "DATA6_CNTL", -1},
+	{ "DATA7_CNTL", -1},
+	{ "DATA8_CNTL", -1},
+	{ "DATA9_CNTL", -1},
+	{ "DATA12_CNTL", -1},
+	{ "DATA13_CNTL", -1},
+	{ "DATA14_CNTL", -1}
+};
+
+static const char *qmi_service_name_asus[] = {
+	"00", "WDS", "DMS", "NAS", "QOS",
+	"WMS", "06", "EAP", "ATCOP", "VOICE",
+	"CAT", "UIM", "PBM", "13", "14",
+	"15", "GPS", "SAR", "IMS_VIDEO", "19",
+	"CSD", "21", "22", "23", "THERMAL"
+};
+
+static const char *smd_type_name[] = {
+	"APPS_MODEM",
+	"APPS_QDSP",
+	"MODEM_QDSP",
+	"APPS_DSPS",
+	"MODEM_DSPS",
+	"QDSP_DSPS",
+	"APPS_WCNSS",
+	"MODEM_WCNSS",
+	"QDSP_WCNSS",
+	"DSPS_WCNSS",
+	"APPS_Q6FW",
+	"MODEM_Q6FW",
+	"QDSP_Q6FW",
+	"DSPS_Q6FW",
+	"WCNSS_Q6FW"
+};
+
+static void set_smd_qmi_ch_tab(const char* name, unsigned n)
+{
+	int i;
+	for (i = 0; i < sizeof(smd_qmi_ch_tab) / sizeof(*smd_qmi_ch_tab); ++i) {
+		if (!strcmp(smd_qmi_ch_tab[i].name, name)) {
+			smd_qmi_ch_tab[i].n = n;
+			break;
+		}
+	}
+}
+
+static void log_smd_pkt_out_of_suspend(smd_channel_t *ch, void *data, int size)
+{
+	int i;
+
+	if (!is_smsm_pm_suspend || ch->type >= SMD_APPS_RPM) {
+		return;
+	}
+	is_smsm_pm_suspend = false;
+	if (ch->type != SMD_APPS_MODEM) {
+		pr_info("[SMD]type=%s ch=%s\n", smd_type_name[ch->type], ch->name);
+		return ;
+	}
+	for (i = 0; i < sizeof(smd_qmi_ch_tab) / sizeof(*smd_qmi_ch_tab); ++i) {
+		if (smd_qmi_ch_tab[i].n == ch->n) {
+			u8 *buf = (u8 *)data;
+			if (size > QMI_RX_MSG_INDEX) {
+				u8 svc_id = buf[QMI_RX_SVC_INDEX];
+				if (svc_id < (sizeof(qmi_service_name_asus)/sizeof(*qmi_service_name_asus))) {
+					pr_info("[SMD]svc %s type %u msg %u\n", qmi_service_name_asus[svc_id],
+					        buf[QMI_RX_TYPE_INDEX], buf[QMI_RX_MSG_INDEX]);
+				}
+				else {
+					pr_info("[SMD]svc %u type %u msg %u\n", svc_id,
+					        buf[QMI_RX_TYPE_INDEX], buf[QMI_RX_MSG_INDEX]);
+				}
+			} else {
+				pr_info("[SMD]type=%s ch=%s\n", smd_type_name[ch->type], ch->name);
+			}
+			return;
+		}
+	}
+	pr_info("[SMD]type=%s ch=%s\n", smd_type_name[ch->type], ch->name);
+}
+/*ASUS-BBSP log SMD wake up packet---*/
+
 static inline void notify_modem_smsm(void)
 {
 	static const struct interrupt_config_item *intr
@@ -563,6 +665,7 @@ static int smsm_pm_notifier(struct notifier_block *nb,
 {
 	switch (event) {
 	case PM_SUSPEND_PREPARE:
+		is_smsm_pm_suspend = true;/*ASUS-BBSP log SMD wake up packet+*/
 		smsm_change_state(SMSM_APPS_STATE, SMSM_PROC_AWAKE, 0);
 		break;
 
@@ -1847,6 +1950,7 @@ static int smd_alloc_channel(struct smd_alloc_elm *alloc_elm, int table_id,
 	ch->pdev.name = ch->name;
 	ch->pdev.id = ch->type;
 
+	set_smd_qmi_ch_tab(ch->name, ch->n);/*ASUS-BBSP log SMD wake up packet+*/
 	SMD_INFO("smd_alloc_channel() '%s' cid=%d\n",
 		 ch->name, ch->n);
 
@@ -2151,12 +2255,14 @@ EXPORT_SYMBOL(smd_write_segment_avail);
 
 int smd_read(smd_channel_t *ch, void *data, int len)
 {
+	int size;/*ASUS-BBSP log SMD wake up packet+*/
 	if (!ch) {
 		pr_err("%s: Invalid channel specified\n", __func__);
 		return -ENODEV;
 	}
-
-	return ch->read(ch, data, len);
+	size = ch->read(ch, data, len);
+	log_smd_pkt_out_of_suspend(ch, data, size);/*ASUS-BBSP log SMD wake up packet+*/
+	return size;
 }
 EXPORT_SYMBOL(smd_read);
 
@@ -3279,6 +3385,10 @@ int __init msm_smd_init(void)
 			__func__, rc);
 		return rc;
 	}
+
+#ifdef ASUS_ZC550KL_PROJECT
+	modemsku = get_rf_sku_id();//asus-bsp-jeewu read sku_id+++
+#endif
 	return 0;
 }
 

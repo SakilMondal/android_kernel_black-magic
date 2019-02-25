@@ -31,7 +31,7 @@ int msm_camera_fill_vreg_params(struct camera_vreg_t *cam_vreg,
 
 	/* Validate input parameters */
 	if (!cam_vreg || !power_setting) {
-		pr_err("%s:%d failed: cam_vreg %p power_setting %p", __func__,
+		pr_err("%s:%d failed: cam_vreg %pK power_setting %pK", __func__,
 			__LINE__,  cam_vreg, power_setting);
 		return -EINVAL;
 	}
@@ -50,7 +50,7 @@ int msm_camera_fill_vreg_params(struct camera_vreg_t *cam_vreg,
 		case CAM_VDIG:
 			for (j = 0; j < num_vreg; j++) {
 				if (!strcmp(cam_vreg[j].reg_name, "cam_vdig")) {
-					pr_err("%s:%d i %d j %d cam_vdig\n",
+					CDBG("%s:%d i %d j %d cam_vdig\n",
 						__func__, __LINE__, i, j);
 					power_setting[i].seq_val = j;
 					break;
@@ -61,7 +61,7 @@ int msm_camera_fill_vreg_params(struct camera_vreg_t *cam_vreg,
 		case CAM_VIO:
 			for (j = 0; j < num_vreg; j++) {
 				if (!strcmp(cam_vreg[j].reg_name, "cam_vio")) {
-					pr_err("%s:%d i %d j %d cam_vio\n",
+					CDBG("%s:%d i %d j %d cam_vio\n",
 						__func__, __LINE__, i, j);
 					power_setting[i].seq_val = j;
 					break;
@@ -72,7 +72,7 @@ int msm_camera_fill_vreg_params(struct camera_vreg_t *cam_vreg,
 		case CAM_VANA:
 			for (j = 0; j < num_vreg; j++) {
 				if (!strcmp(cam_vreg[j].reg_name, "cam_vana")) {
-					pr_err("%s:%d i %d j %d cam_vana\n",
+					CDBG("%s:%d i %d j %d cam_vana\n",
 						__func__, __LINE__, i, j);
 					power_setting[i].seq_val = j;
 					break;
@@ -83,7 +83,7 @@ int msm_camera_fill_vreg_params(struct camera_vreg_t *cam_vreg,
 		case CAM_VAF:
 			for (j = 0; j < num_vreg; j++) {
 				if (!strcmp(cam_vreg[j].reg_name, "cam_vaf")) {
-					pr_err("%s:%d i %d j %d cam_vaf\n",
+					CDBG("%s:%d i %d j %d cam_vaf\n",
 						__func__, __LINE__, i, j);
 					power_setting[i].seq_val = j;
 					break;
@@ -1224,7 +1224,7 @@ int msm_camera_power_up(struct msm_camera_power_ctrl_t *ctrl,
 
 	CDBG("%s:%d\n", __func__, __LINE__);
 	if (!ctrl || !sensor_i2c_client) {
-		pr_err("failed ctrl %p sensor_i2c_client %p\n", ctrl,
+		pr_err("failed ctrl %pK sensor_i2c_client %pK\n", ctrl,
 			sensor_i2c_client);
 		return -EINVAL;
 	}
@@ -1308,6 +1308,14 @@ int msm_camera_power_up(struct msm_camera_power_ctrl_t *ctrl,
 					SENSOR_GPIO_MAX);
 				goto power_up_failed;
 			}
+
+			//ASUS_BSP +++ Deka "support laser sensor 2nd source"
+                    	if(g_ASUS_laserID==0 && power_setting->seq_val == CAM_VAF){
+                            printk("Deka power up g_ASUS_laserID = %d",g_ASUS_laserID);
+                            break;
+                        }
+           		//ASUS_BSP --- Deka "support laser sensor 2nd source"
+
 			if (power_setting->seq_val < ctrl->num_vreg)
 				msm_camera_config_single_vreg(ctrl->dev,
 				&ctrl->cam_vreg[power_setting->seq_val],
@@ -1443,7 +1451,7 @@ int msm_camera_power_down(struct msm_camera_power_ctrl_t *ctrl,
 
 	CDBG("%s:%d\n", __func__, __LINE__);
 	if (!ctrl || !sensor_i2c_client) {
-		pr_err("failed ctrl %p sensor_i2c_client %p\n", ctrl,
+		pr_err("failed ctrl %pK sensor_i2c_client %pK\n", ctrl,
 			sensor_i2c_client);
 		return -EINVAL;
 	}

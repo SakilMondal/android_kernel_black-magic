@@ -33,6 +33,10 @@
 #define MDP_INTR_MASK_INTF_VSYNC(intf_num) \
 	(1 << (2 * (intf_num - MDSS_MDP_INTF0) + MDSS_MDP_IRQ_INTF_VSYNC))
 
+//ASUS_BSP: Louis ++
+extern int MdpBoostUp;
+//ASUS_BSP: Louis --
+
 /* intf timing settings */
 struct intf_timing_params {
 	u32 width;
@@ -116,7 +120,7 @@ int mdss_mdp_video_addr_setup(struct mdss_data_type *mdata,
 
 	for (i = 0; i < count; i++) {
 		head[i].base = mdata->mdss_io.base + offsets[i];
-		pr_debug("adding Video Intf #%d offset=0x%x virt=%p\n", i,
+		pr_debug("adding Video Intf #%d offset=0x%x virt=%pK\n", i,
 				offsets[i], head[i].base);
 		head[i].ref_cnt = 0;
 		head[i].intf_num = i + MDSS_MDP_INTF0;
@@ -442,7 +446,7 @@ static int mdss_mdp_video_intfs_stop(struct mdss_mdp_ctl *ctl,
 			pr_err("Intf %d not in use\n", (inum + MDSS_MDP_INTF0));
 			return -ENODEV;
 		}
-		pr_debug("stop ctl=%d video Intf #%d base=%p", ctl->num,
+		pr_debug("stop ctl=%d video Intf #%d base=%pK", ctl->num,
 			ctx->intf_num, ctx->base);
 	} else {
 		pr_err("Invalid intf number: %d\n", (inum + MDSS_MDP_INTF0));
@@ -656,6 +660,11 @@ static void mdss_mdp_video_underrun_intr_done(void *arg)
 
 	if (ctl->opmode & MDSS_MDP_CTL_OP_PACK_3D_ENABLE)
 		schedule_work(&ctl->recover_work);
+
+    //ASUS_BSP: Louis +++, "boostup mdp in 10 frames update"
+    MdpBoostUp = 10;
+    mdss_set_mdp_max_clk(1);
+    //ASUS_BSP: Louis ---
 }
 
 static int mdss_mdp_video_vfp_fps_update(struct mdss_mdp_video_ctx *ctx,
@@ -1158,7 +1167,7 @@ static int mdss_mdp_video_intfs_setup(struct mdss_mdp_ctl *ctl,
 				(inum + MDSS_MDP_INTF0));
 			return -EBUSY;
 		}
-		pr_debug("video Intf #%d base=%p", ctx->intf_num, ctx->base);
+		pr_debug("video Intf #%d base=%pK", ctx->intf_num, ctx->base);
 		ctx->ref_cnt++;
 	} else {
 		pr_err("Invalid intf number: %d\n", (inum + MDSS_MDP_INTF0));

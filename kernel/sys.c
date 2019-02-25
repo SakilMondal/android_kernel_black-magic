@@ -396,8 +396,16 @@ static void migrate_to_reboot_cpu(void)
  *	Shutdown everything and perform a clean reboot.
  *	This is not safe to call in interrupt context.
  */
+
+#ifndef CONFIG_LEDS_AW2013
+extern void led_clean(void);	//ASUS_BSP Austin_T
+#endif
+
 void kernel_restart(char *cmd)
 {
+#ifndef CONFIG_LEDS_AW2013
+	led_clean();	//ASUS_BSP Austin_T
+#endif
 	kernel_restart_prepare(cmd);
 	migrate_to_reboot_cpu();
 	syscore_shutdown();

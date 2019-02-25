@@ -1188,14 +1188,17 @@ static long do_fb_ioctl(struct fb_info *info, unsigned int cmd,
 		unlock_fb_info(info);
 		break;
 	case FBIOBLANK:
+	//ASUS_BSP: Louis +++
+        printk("[Display] FBIOBLANK(%d)+++\n", (int) arg);
 		if (!lock_fb_info(info))
 			return -ENODEV;
-		console_lock();
+		//console_lock();
 		info->flags |= FBINFO_MISC_USEREVENT;
 		ret = fb_blank(info, arg);
 		info->flags &= ~FBINFO_MISC_USEREVENT;
-		console_unlock();
+		//console_unlock();
 		unlock_fb_info(info);
+        printk("[Display] FBIOBLANK(%d)---\n", (int) arg);
 		break;
 	default:
 		fb = info->fbops;

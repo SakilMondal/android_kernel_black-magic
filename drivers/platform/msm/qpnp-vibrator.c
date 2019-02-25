@@ -25,16 +25,16 @@
 #define QPNP_VIB_VTG_CTL(base)		(base + 0x41)
 #define QPNP_VIB_EN_CTL(base)		(base + 0x46)
 
-#define QPNP_VIB_MAX_LEVEL		31
+#define QPNP_VIB_MAX_LEVEL		33		//ASUS Austin_T : Change vibrator to 3.3V
 #define QPNP_VIB_MIN_LEVEL		12
 
 #define QPNP_VIB_DEFAULT_TIMEOUT	15000
-#define QPNP_VIB_DEFAULT_VTG_LVL	3100
+#define QPNP_VIB_DEFAULT_VTG_LVL	3300		//ASUS Austin_T : Change vibrator to 3.3V
 
 #define QPNP_VIB_EN			BIT(7)
 #define QPNP_VIB_VTG_SET_MASK		0x1F
 #define QPNP_VIB_LOGIC_SHIFT		4
-
+static int g_vib_stop_val =0;
 enum qpnp_vib_mode {
 	QPNP_VIB_MANUAL,
 	QPNP_VIB_DTEST1,
@@ -92,6 +92,72 @@ static int qpnp_vib_write_u8(struct qpnp_vib *vib, u8 *data, u16 reg)
 
 	return rc;
 }
+/*ASUS BSP Eric : Function for Adjust Vibrator Voltage*/
+static int vibrator_volatge ;
+struct qpnp_vib *g_vib;
+
+static int VibratorMode_function(const char *val, struct kernel_param *kp)
+{
+	int ret = 0;
+	u8 reg = 0;
+	int rc;
+	ret = param_set_int(val, kp);
+
+	if (ret)
+		return ret;
+
+	vibrator_volatge/=100;
+	if (vibrator_volatge < QPNP_VIB_MIN_LEVEL)
+		vibrator_volatge= QPNP_VIB_MIN_LEVEL;
+	else if (vibrator_volatge> QPNP_VIB_MAX_LEVEL)
+		vibrator_volatge = QPNP_VIB_MAX_LEVEL;
+
+	/* Configure the VTG CTL regiser */
+	rc = qpnp_vib_read_u8(g_vib, &reg, QPNP_VIB_VTG_CTL(g_vib->base));
+	if (rc < 0)
+		return rc;
+	reg &= ~QPNP_VIB_VTG_SET_MASK;
+	reg |= (vibrator_volatge & QPNP_VIB_VTG_SET_MASK);
+	rc = qpnp_vib_write_u8(g_vib, &reg, QPNP_VIB_VTG_CTL(g_vib->base));
+	if (rc)
+		return rc;
+	g_vib->reg_vtg_ctl = reg;
+
+	/* Configure the VIB ENABLE regiser */
+	rc = qpnp_vib_read_u8(g_vib, &reg, QPNP_VIB_EN_CTL(g_vib->base));
+	if (rc < 0)
+		return rc;
+	reg |= (!!g_vib->active_low) << QPNP_VIB_LOGIC_SHIFT;
+	if (g_vib->mode != QPNP_VIB_MANUAL) {
+		g_vib->pwm_info.pwm_dev = pwm_request(g_vib->pwm_info.pwm_channel,
+								 "qpnp-vib");
+		if (IS_ERR_OR_NULL(g_vib->pwm_info.pwm_dev)) {
+			dev_err(&g_vib->spmi->dev, "vib pwm request failed\n");
+			return -ENODEV;
+		}
+
+		rc = pwm_config(g_vib->pwm_info.pwm_dev, g_vib->pwm_info.duty_us,
+						g_vib->pwm_info.period_us);
+		if (rc < 0) {
+			dev_err(&g_vib->spmi->dev, "vib pwm config failed\n");
+			pwm_free(g_vib->pwm_info.pwm_dev);
+			return -ENODEV;
+		}
+
+		reg |= BIT(g_vib->mode - 1);
+	}
+
+	rc = qpnp_vib_write_u8(g_vib, &reg, QPNP_VIB_EN_CTL(g_vib->base));
+	if (rc < 0)
+		return rc;
+	g_vib->reg_en_ctl = reg;
+
+
+	return 0;
+}
+
+module_param_call(vibrator_volatge, VibratorMode_function, param_get_int, &vibrator_volatge, 0644);
+/*ASUS BSP Eric : Function for Adjust Vibrator Voltage*/
 
 static int qpnp_vibrator_config(struct qpnp_vib *vib)
 {
@@ -154,6 +220,28 @@ static int qpnp_vib_set(struct qpnp_vib *vib, int on)
 			val |= QPNP_VIB_EN;
 			rc = qpnp_vib_write_u8(vib, &val,
 					QPNP_VIB_EN_CTL(vib->base));
+		//ASUS BSP freddy++ add Turn on vibrator and start Timer debug msg
+			//[A91][vib][Fix][NA] add for fix sometimes no vibration when pad inserted.
+	#if 0		 
+		if (g_vib_stop_val > 100)
+		{
+			printk("[vibrator] Turn on vibrator, timer= %d ms\n",g_vib_stop_val);
+		}	
+	#endif	
+	 //+++ SZ_BSP gauss_li fix zc550 vibrator too weak 
+    #ifdef ASUS_ZC550KL_PROJECT
+	   if (g_vib_stop_val < 30)
+		{
+			 printk("[vibrator]  before timer = %d ms\n",g_vib_stop_val);
+			 g_vib_stop_val = 30;
+		 }
+     #endif	
+	 //--- SZ_BSP gauss_li fix zc550 vibrator too weak 
+		printk("[vibrator] Turn on vibrator, timer= %d ms\n",g_vib_stop_val);
+		hrtimer_start(&vib->vib_timer,
+			      ktime_set(g_vib_stop_val / 1000, (g_vib_stop_val % 1000) * 1000000),
+			      HRTIMER_MODE_REL);		
+		//ASUS BSP freddy-- Turn on vibrator and start Timer
 			if (rc < 0)
 				return rc;
 			vib->reg_en_ctl = val;
@@ -179,7 +267,7 @@ static void qpnp_vib_enable(struct timed_output_dev *dev, int value)
 {
 	struct qpnp_vib *vib = container_of(dev, struct qpnp_vib,
 					 timed_dev);
-
+	printk("[vibrator] Vibrator Ebable\n");
 	mutex_lock(&vib->lock);
 	hrtimer_cancel(&vib->vib_timer);
 
@@ -189,9 +277,14 @@ static void qpnp_vib_enable(struct timed_output_dev *dev, int value)
 		value = (value > vib->timeout ?
 				 vib->timeout : value);
 		vib->state = 1;
+//ASUS BSP freddy++ "[A91][vib][Fix][NA] add for fix sometimes no vibration when pad inserted.  "
+		g_vib_stop_val = value;
+		/*
 		hrtimer_start(&vib->vib_timer,
 			      ktime_set(value / 1000, (value % 1000) * 1000000),
 			      HRTIMER_MODE_REL);
+		*/
+//ASUS BSP freddy-- "[A91][vib][Fix][NA] add for fix sometimes no vibration when pad inserted.  "		
 	}
 	mutex_unlock(&vib->lock);
 	schedule_work(&vib->work);
@@ -356,6 +449,11 @@ static int qpnp_vibrator_probe(struct spmi_device *spmi)
 		return rc;
 	}
 
+	/*ASUS BSP Add global vib*/
+	g_vib = vib;
+	/*ASUS BSP Add global vib*/
+	
+	printk("[vibrator] QPNP Vibrator Probe\n");
 	mutex_init(&vib->lock);
 	INIT_WORK(&vib->work, qpnp_vib_update);
 

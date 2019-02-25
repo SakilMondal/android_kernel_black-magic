@@ -24,7 +24,14 @@ struct panel_id {
 	u16 id;
 	u16 type;
 };
-
+#ifndef ASUS_ZC550KL_PROJECT
+//ASUS_BSP: Louis ++
+struct panel_list {
+	char name[16];
+	uint32_t lcd_id;
+};
+//ASUS_BSP: Louis --
+#endif
 #define DEFAULT_FRAME_RATE	60
 #define DEFAULT_ROTATOR_FRAME_RATE 120
 #define MDSS_DSI_RST_SEQ_LEN	10

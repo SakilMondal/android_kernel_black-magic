@@ -44,6 +44,10 @@
 #define IS_RIGHT_MIXER_OV(flags, dst_x, left_lm_w)	\
 	((flags & MDSS_MDP_RIGHT_MIXER) || (dst_x >= left_lm_w))
 
+//ASUS_BSP: Louis +++
+extern int MdpBoostUp;
+//ASUS_BSP: Louis ---
+
 static int mdss_mdp_overlay_free_fb_pipe(struct msm_fb_data_type *mfd);
 static int mdss_mdp_overlay_fb_parse_dt(struct msm_fb_data_type *mfd);
 static int mdss_mdp_overlay_off(struct msm_fb_data_type *mfd);
@@ -1592,6 +1596,15 @@ unlock_exit:
 	if (ctl->shared_lock)
 		mutex_unlock(ctl->shared_lock);
 	ATRACE_END(__func__);
+	
+    //ASUS_BSP: Louis +++
+    if (MdpBoostUp > 0) {
+        MdpBoostUp--;
+        if (MdpBoostUp == 0) {
+            mdss_set_mdp_max_clk(0);
+        }
+    }
+    //ASUS_BSP: Louis ---
 
 	return ret;
 }
@@ -3218,16 +3231,20 @@ static int __mdss_overlay_src_split_sort(struct msm_fb_data_type *mfd,
 		__overlay_swap_func);
 
 	for (i = 0; i < num_ovs; i++) {
+		if (ovs[i].z_order >= MDSS_MDP_MAX_STAGE) {
+			pr_err("invalid stage:%u\n", ovs[i].z_order);
+			return -EINVAL;
+		}
 		if (ovs[i].dst_rect.x < left_lm_w) {
 			if (left_lm_zo_cnt[ovs[i].z_order] == 2) {
-				pr_err("more than 2 ov @ stage%d on left lm\n",
+				pr_err("more than 2 ov @ stage%u on left lm\n",
 					ovs[i].z_order);
 				return -EINVAL;
 			}
 			left_lm_zo_cnt[ovs[i].z_order]++;
 		} else {
 			if (right_lm_zo_cnt[ovs[i].z_order] == 2) {
-				pr_err("more than 2 ov @ stage%d on right lm\n",
+				pr_err("more than 2 ov @ stage%u on right lm\n",
 					ovs[i].z_order);
 				return -EINVAL;
 			}

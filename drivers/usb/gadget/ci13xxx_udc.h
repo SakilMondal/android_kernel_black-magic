@@ -184,6 +184,9 @@ struct ci13xxx {
 	bool                      skip_flush; /* skip flushing remaining EP
 						upon flush timeout for the
 						first EP. */
+//ASUS_BSP+++ LandiceFu "[ZE500KL][USBH][NA][spec] Support USB1.0/2.0 switch for factory test requirement"
+	unsigned int 		force_usb1;
+//ASUS_BSP--- LandiceFu "[ZE500KL][USBH][NA][spec] Support USB1.0/2.0 switch for factory test requirement"
 };
 
 /******************************************************************************
@@ -223,6 +226,9 @@ struct ci13xxx {
 #define DEVICEADDR_USBADR     (0x7FUL << 25)
 
 /* PORTSC */
+//ASUS_BSP+++ LandiceFu "[ZE500KL][USBH][NA][spec] Support USB1.0/2.0 switch for factory test requirement"
+#define PORTSC_PFSC           BIT(24)
+//ASUS_BSP--- LandiceFu "[ZE500KL][USBH][NA][spec] Support USB1.0/2.0 switch for factory test requirement"
 #define PORTSC_FPR            BIT(6)
 #define PORTSC_SUSP           BIT(7)
 #define PORTSC_PR             BIT(8)

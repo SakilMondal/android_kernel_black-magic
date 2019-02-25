@@ -393,7 +393,11 @@ struct device_node *of_batterydata_get_best_profile(
 
 	return best_node;
 }
-
+// bsp WeiYu +++
+#define batt_thd_high_uv	1500000
+#define batt_thd_low_uv	200000
+#define default_bat_NVT	23
+// bsp WeiYu ---
 int of_batterydata_read_data(struct device_node *batterydata_container_node,
 				struct bms_battery_data *batt_data,
 				int batt_id_uv)
@@ -410,8 +414,15 @@ int of_batterydata_read_data(struct device_node *batterydata_container_node,
 	if (rc)
 		return rc;
 
-	batt_id_kohm = of_batterydata_convert_battery_id_kohm(batt_id_uv,
+	if(batt_id_uv > batt_thd_high_uv || batt_id_uv < batt_thd_low_uv){
+		batt_id_kohm = default_bat_NVT;
+		printk("%s: batt_id_uv out of range, taking it as default batt\n", __FUNCTION__);
+	}
+	else
+		batt_id_kohm = of_batterydata_convert_battery_id_kohm(batt_id_uv,
 					rpull_up_kohm, vadc_vdd_uv);
+
+	
 	best_node = NULL;
 	best_delta = 0;
 	best_id_kohm = 0;
@@ -446,6 +457,12 @@ int of_batterydata_read_data(struct device_node *batterydata_container_node,
 	else
 		pr_info("%s loaded\n", best_node->name);
 
+
+	if (batt_data->battery_type != NULL &&
+		strcmp(battery_type, batt_data->battery_type) == 0){ 
+		printk("same battery type, need not reload batt data\n");
+		return 100;
+	}
 	return of_batterydata_load_battery_data(best_node,
 					best_id_kohm, batt_data);
 }

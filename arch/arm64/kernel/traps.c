@@ -179,6 +179,12 @@ void show_stack(struct task_struct *tsk, unsigned long *sp)
 	barrier();
 }
 
+void dump_stack(void)
+{
+	dump_backtrace(NULL, NULL);
+}
+EXPORT_SYMBOL(dump_stack); //ASUS_BSP Deeo : add for SD Texura module +++
+
 #ifdef CONFIG_PREEMPT
 #define S_PREEMPT " PREEMPT"
 #else
@@ -226,7 +232,8 @@ static DEFINE_RAW_SPINLOCK(die_lock);
 void die(const char *str, struct pt_regs *regs, int err)
 {
 	struct thread_info *thread = current_thread_info();
-	int ret;
+	int ret = 0;
+	char message[128]; //jack
 	enum bug_trap_type bug_type = BUG_TRAP_TYPE_NONE;
 
 	oops_enter();
@@ -234,11 +241,13 @@ void die(const char *str, struct pt_regs *regs, int err)
 	raw_spin_lock_irq(&die_lock);
 	console_verbose();
 	bust_spinlocks(1);
+	if (regs != NULL) {
 	if (!user_mode(regs))
 		bug_type = report_bug(regs->pc, regs);
 	if (bug_type != BUG_TRAP_TYPE_NONE)
 		str = "Oops - BUG";
 	ret = __die(str, err, thread, regs);
+	}
 
 	if (regs && kexec_should_crash(thread->task))
 		crash_kexec(regs);
@@ -248,10 +257,14 @@ void die(const char *str, struct pt_regs *regs, int err)
 	raw_spin_unlock_irq(&die_lock);
 	oops_exit();
 
-	if (in_interrupt())
-		panic("Fatal exception in interrupt");
-	if (panic_on_oops)
-		panic("Fatal exception");
+	if (in_interrupt()) {
+        sprintf(message, "DIE:in int %s", str); // jack
+        panic(message);
+    }
+	if (panic_on_oops) {
+        sprintf(message, "DIE :%s", str); // jack
+        panic(message);
+    }
 	if (ret != NOTIFY_STOP)
 		do_exit(SIGSEGV);
 }

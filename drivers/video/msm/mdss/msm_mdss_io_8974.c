@@ -868,9 +868,19 @@ error:
 
 static int mdss_dsi_link_clk_set_rate(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 {
-	u32 esc_clk_rate = 19200000;
+#ifndef ASUS_ZC550KL_PROJECT
+    u32 esc_clk_rate;
 	int rc = 0;
 
+    if(g_asus_lcdID == ZE500KL_LCD_AUO)
+        esc_clk_rate = 19200000;
+    else
+        esc_clk_rate = 9600000;
+#else
+
+	u32 esc_clk_rate = 19200000;
+	int rc = 0;
+#endif
 	if (!ctrl_pdata) {
 		pr_err("%s: Invalid input data\n", __func__);
 		return -EINVAL;
@@ -1365,7 +1375,7 @@ static int mdss_dsi_core_power_ctrl(struct mdss_dsi_ctrl_pdata *ctrl,
 		 * Phy and controller setup is needed if coming out of idle
 		 * power collapse with clamps enabled.
 		 */
-		if (ctrl->mmss_clamp) {
+        if (ctrl->mmss_clamp || !pdata->panel_info.cont_splash_enabled) {
 			mdss_dsi_phy_init(ctrl);
 			mdss_dsi_ctrl_setup(ctrl);
 		}

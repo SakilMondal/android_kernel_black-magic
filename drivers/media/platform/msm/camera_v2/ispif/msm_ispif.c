@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -1169,9 +1169,15 @@ static irqreturn_t msm_io_ispif_irq(int irq_num, void *data)
 static int msm_ispif_set_vfe_info(struct ispif_device *ispif,
 	struct msm_ispif_vfe_info *vfe_info)
 {
-	memcpy(&ispif->vfe_info, vfe_info, sizeof(struct msm_ispif_vfe_info));
-	if (ispif->vfe_info.num_vfe > ispif->hw_num_isps)
+	if (!vfe_info || (vfe_info->num_vfe <= 0) ||
+		((uint32_t)(vfe_info->num_vfe) > ispif->hw_num_isps)) {
+		pr_err("Invalid VFE info: %pK %d\n", vfe_info,
+			   (vfe_info ? vfe_info->num_vfe:0));
 		return -EINVAL;
+	}
+
+	memcpy(&ispif->vfe_info, vfe_info, sizeof(struct msm_ispif_vfe_info));
+
 	return 0;
 }
 
@@ -1200,7 +1206,7 @@ static int msm_ispif_init(struct ispif_device *ispif,
 
 	if (ispif->csid_version >= CSID_VERSION_V30) {
 		if (!ispif->clk_mux_mem || !ispif->clk_mux_io) {
-			pr_err("%s csi clk mux mem %p io %p\n", __func__,
+			pr_err("%s csi clk mux mem %pK io %pK\n", __func__,
 				ispif->clk_mux_mem, ispif->clk_mux_io);
 			rc = -ENOMEM;
 			return rc;

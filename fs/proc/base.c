@@ -351,7 +351,23 @@ static int proc_pid_schedstat(struct task_struct *task, char *buffer)
 			task->sched_info.pcount);
 }
 #endif
+static int proc_pid_binder_sender_pid(struct task_struct *task, char *buffer)
+{
+	printk("proc_pid_binder_sender, task->comm=%s, binder_sender_pid=%d\r\n", task->comm, (int)task->binder_sender_pid);
+	if (strncmp("Binder", task->comm, 6) == 0) {
+		return sprintf(buffer, "calling binder:%d\n", (int)task->binder_sender_pid);
+	} else
+		return sprintf(buffer, "Not a Binder Thread\n");
 
+}
+static int proc_pid_binder_sender_tid(struct task_struct *task, char *buffer)
+{
+	printk("proc_pid_binder_sender, task->comm=%s, binder_sender_tid=%d\r\n", task->comm, (int)task->binder_sender_tid);
+	if (strncmp("Binder", task->comm, 6) == 0) {
+		return sprintf(buffer, "calling binder:%d\n", (int)task->binder_sender_tid);
+	} else
+		return sprintf(buffer, "Not a Binder Thread\n");
+}
 #ifdef CONFIG_LATENCYTOP
 static int lstats_show_proc(struct seq_file *m, void *v)
 {
@@ -851,7 +867,8 @@ static ssize_t environ_read(struct file *file, char __user *buf,
 	int ret = 0;
 	struct mm_struct *mm = file->private_data;
 
-	if (!mm)
+	/* Ensure the process spawned far enough to have an environment. */
+	if (!mm || !mm->env_end)	
 		return 0;
 
 	page = (char *)__get_free_page(GFP_TEMPORARY);
@@ -2774,6 +2791,8 @@ static const struct pid_entry tgid_base_stuff[] = {
 #ifdef CONFIG_CHECKPOINT_RESTORE
 	REG("timers",	  S_IRUGO, proc_timers_operations),
 #endif
+	INF("binder_sender_pid",     S_IRUGO, proc_pid_binder_sender_pid),
+	INF("binder_sender_tid",     S_IRUGO, proc_pid_binder_sender_tid),
 };
 
 static int proc_tgid_base_readdir(struct file * filp,

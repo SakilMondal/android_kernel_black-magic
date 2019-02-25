@@ -4,6 +4,7 @@
 
 # Each configuration option enables a list of files.
 
+ftxxxx-objs += ftxxxx_ts.o ftxxxx_ex_fun.o focaltech_ctl.o ini.o test_lib.o
 wm97xx-ts-y := wm97xx-core.o
 
 obj-$(CONFIG_TOUCHSCREEN_88PM860X)	+= 88pm860x-ts.o
@@ -84,3 +85,6 @@ obj-$(CONFIG_TOUCHSCREEN_GT9XX)		+= gt9xx/
 obj-$(CONFIG_TOUCHSCREEN_BU21150)	+= bu21150.o
 obj-$(CONFIG_INPUT_MT_WRAPPER)		+= input_mt_wrapper.o
 obj-$(CONFIG_TOUCHSCREEN_IT7260_I2C)    += it7258_ts_i2c.o
+obj-$(CONFIG_TOUCHSCREEN_FT5X46) += ftxxxx.o
+#ASUS_BSP Freeman +++
+obj-$(CONFIG_TOUCHSCREEN_FT5X46_ZC550KL)	+= Focal_ZC550KL/

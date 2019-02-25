@@ -44,6 +44,28 @@
 							217, void *)
 #define AUDIO_SET_RTAC_AFE_CAL		_IOWR(CAL_IOCTL_MAGIC, \
 							218, void *)
+
+/* ASUS_BSP Paul +++ */
+#define AUDIO_SET_CODEC_REG			_IOWR(CAL_IOCTL_MAGIC, \
+							219, void *)
+#define AUDIO_GET_CODEC_REG			_IOWR(CAL_IOCTL_MAGIC, \
+							220, void *)
+#define AUDIO_SET_RINGTONE_PROFILE	_IOW(CAL_IOCTL_MAGIC, \
+							221, void *)
+#define AUDIO_GET_RINGTONE_PROFILE	_IOR(CAL_IOCTL_MAGIC, \
+							222, void *)
+#define AUDIO_SET_SKYPE_STATE			_IOW(CAL_IOCTL_MAGIC, \
+							223, void *)
+#define AUDIO_GET_SKYPE_STATE			_IOR(CAL_IOCTL_MAGIC, \
+							224, void *)
+/* ASUS_BSP Paul --- */
+//Sharon++
+#define AUDIO_SET_MODE					_IOWR(CAL_IOCTL_MAGIC, \
+							225, void *)
+
+extern int get_audiomode(void);
+//Sharon--
+
 enum {
 	CVP_VOC_RX_TOPOLOGY_CAL_TYPE = 0,
 	CVP_VOC_TX_TOPOLOGY_CAL_TYPE,
@@ -89,6 +111,15 @@ enum {
 	DTS_EAGLE_CAL_TYPE,
 	AUDIO_CORE_METAINFO_CAL_TYPE,
 	SRS_TRUMEDIA_CAL_TYPE,
+
+	/* ASUS_BSP Paul +++ */
+	CODEC_REG_TYPE,
+	RINGTONE_PROFILE_TYPE,
+	SKYPE_STATE_TYPE,
+	/* ASUS_BSP Paul --- */
+	//Sharon++
+	SET_MODE_TYPE,
+	//Sharon--
 
 	MAX_CAL_TYPES,
 };

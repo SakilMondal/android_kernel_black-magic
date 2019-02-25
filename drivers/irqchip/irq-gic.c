@@ -51,6 +51,8 @@
 
 #include "irqchip.h"
 
+int gic_irq_cnt,gic_resume_irq[8];//ASUS_BSP [Power] jeff_gu Add for wakeup debug
+
 union gic_base {
 	void __iomem *common_base;
 	void __percpu __iomem **percpu_base;
@@ -269,6 +271,36 @@ void gic_show_pending_irq(void)
 		}
 	}
 }
+//ASUS_BSP+++ "for wlan wakeup trace"
+extern int g_wcnss_wlanrx_irq;
+static int wcnss_irq_flag_rx = 0;
+static int wcnss_irq_flag_wdi = 0;
+
+int wcnss_irq_flag_function_rx(void)
+{
+    if( wcnss_irq_flag_rx == 1 ) {
+        wcnss_irq_flag_rx = 0;
+        return 1;
+    }
+
+    return 0;
+}
+EXPORT_SYMBOL(wcnss_irq_flag_function_rx);
+
+
+int wcnss_irq_flag_function_wdi(void){
+    if( wcnss_irq_flag_wdi == 1 ){
+        wcnss_irq_flag_wdi = 0;
+        wcnss_irq_flag_rx = 0;
+        return 1;
+    }
+
+    return 0;
+}
+EXPORT_SYMBOL(wcnss_irq_flag_function_wdi);
+
+
+//ASUS_BSP--- "for wlan wakeup trace"
 
 static void gic_show_resume_irq(struct gic_chip_data *gic)
 {
@@ -276,6 +308,12 @@ static void gic_show_resume_irq(struct gic_chip_data *gic)
 	u32 enabled;
 	u32 pending[32];
 	void __iomem *base = gic_data_dist_base(gic);
+//ASUS_BSP [+++][Power] jeff_gu Add for wakeup debug
+	int j;
+	for (j=0;j < 8; j++)
+		gic_resume_irq[j]=0;
+	gic_irq_cnt=0;
+//ASUS_BSP [---][Power] jeff_gu Add for wakeup debug
 
 	if (!msm_show_resume_irq_mask)
 		return;
@@ -299,9 +337,24 @@ static void gic_show_resume_irq(struct gic_chip_data *gic)
 		else if (desc->action && desc->action->name)
 			name = desc->action->name;
 
-		pr_warning("%s: %d triggered %s\n", __func__,
-					i + gic->irq_offset, name);
+		pr_warning("[PM]IRQ: %d triggered %s\n", i + gic->irq_offset, name);
+		//[+++][Power]Add for wakeup debug
+		if (gic_irq_cnt < 8)
+			gic_resume_irq[gic_irq_cnt]=i + gic->irq_offset;
+		gic_irq_cnt++;
+		//[---][Power]Add for wakeup debug
+
+		//ASUS_BSP+++ "for wlan wakeup trace"
+		if( (i + gic->irq_offset) == g_wcnss_wlanrx_irq ){
+		    wcnss_irq_flag_rx = 1;
+		    wcnss_irq_flag_wdi = 1;
+		}
+		//ASUS_BSP--- "for wlan wakeup trace"
 	}
+	//[+++][Power]Add for wakeup debug
+	if (gic_irq_cnt >= 8)
+		gic_irq_cnt = 7;
+	//[---][Power]Add for wakeup debug
 }
 
 static void gic_resume_one(struct gic_chip_data *gic)

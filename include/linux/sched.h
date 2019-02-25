@@ -1533,6 +1533,9 @@ struct task_struct {
 	unsigned int	sequential_io;
 	unsigned int	sequential_io_avg;
 #endif
+
+	int binder_sender_pid;
+	int binder_sender_tid;
 };
 
 /* Future-safe accessor for struct task_struct's cpus_allowed. */

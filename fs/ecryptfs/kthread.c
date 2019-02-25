@@ -147,7 +147,7 @@ int ecryptfs_privileged_open(struct file **lower_file,
 	flags |= IS_RDONLY(lower_dentry->d_inode) ? O_RDONLY : O_RDWR;
 	(*lower_file) = dentry_open(&req.path, flags, cred);
 	if (!IS_ERR(*lower_file))
-		goto out;
+		goto out;		
 	if ((flags & O_ACCMODE) == O_RDONLY) {
 		rc = PTR_ERR((*lower_file));
 		goto out;

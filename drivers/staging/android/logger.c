@@ -37,6 +37,10 @@
 #define CONFIG_LOGCAT_SIZE 256
 #endif
 
+//thomas_chu +++
+#include <linux/asus_global.h>
+extern struct _asus_global asus_global;
+//thomas_chu ---
 /**
  * struct logger_log - represents a specific log, such as 'main' or 'radio'
  * @buffer:	The actual ring buffer
@@ -63,6 +67,7 @@ struct logger_log {
 	size_t			head;
 	size_t			size;
 	struct list_head	logs;
+	struct list_head        plugins;
 };
 
 static LIST_HEAD(log_list);
@@ -469,6 +474,7 @@ static ssize_t do_write_log_from_user(struct logger_log *log,
  * writev(), and aio_write(). Writes are our fast path, and we try to optimize
  * them above all else.
  */
+extern unsigned int asusdebug_enable;
 static ssize_t logger_aio_write(struct kiocb *iocb, const struct iovec *iov,
 			 unsigned long nr_segs, loff_t ppos)
 {
@@ -478,7 +484,11 @@ static ssize_t logger_aio_write(struct kiocb *iocb, const struct iovec *iov,
 	struct timespec now;
 	ssize_t ret = 0;
 
-	now = current_kernel_time();
+
+	getnstimeofday(&now);
+
+	if (asusdebug_enable==0x11223344)
+		return 0;
 
 	header.pid = current->tgid;
 	header.tid = current->pid;
@@ -542,7 +552,16 @@ static struct logger_log *get_log_from_minor(int minor)
 			return log;
 	return NULL;
 }
+static struct logger_log *get_log_from_name(const char *name)
+{
+	struct logger_log *log;
 
+	list_for_each_entry(log, &log_list, logs)
+		if (strncmp(log->misc.name, name, strlen(name)) == 0)
+			return log;
+
+	return NULL;
+}
 /*
  * logger_open - the log's open() file operation
  *
@@ -812,23 +831,39 @@ static int __init logger_init(void)
 {
 	int ret;
 
-	ret = create_log(LOGGER_LOG_MAIN, CONFIG_LOGCAT_SIZE*1024);
+	ret = create_log(LOGGER_LOG_MAIN, CONFIG_LOGCAT_SIZE*1024 * 2 );
 	if (unlikely(ret))
 		goto out;
 
-	ret = create_log(LOGGER_LOG_EVENTS, CONFIG_LOGCAT_SIZE*1024);
+	ret = create_log(LOGGER_LOG_EVENTS, CONFIG_LOGCAT_SIZE*1024 * 2);
 	if (unlikely(ret))
 		goto out;
 
-	ret = create_log(LOGGER_LOG_RADIO, CONFIG_LOGCAT_SIZE*1024);
+	ret = create_log(LOGGER_LOG_RADIO, CONFIG_LOGCAT_SIZE*1024 * 2);
 	if (unlikely(ret))
 		goto out;
 
-	ret = create_log(LOGGER_LOG_SYSTEM, CONFIG_LOGCAT_SIZE*1024);
+	ret = create_log(LOGGER_LOG_SYSTEM, CONFIG_LOGCAT_SIZE*1024 * 2);
 	if (unlikely(ret))
 		goto out;
 
 out:
+/*
+ * Following code NOT work.
+ * We have to fix it.
+ */
+#if 0
+//thomas_chu +++
+	asus_global.log_main_addr = (char*)(&(log_main));
+	asus_global.sizeof_log_main=sizeof(log_main);
+	asus_global.log_system_addr = (char*)(&log_system);
+	asus_global.sizeof_log_system=sizeof(log_system);
+	asus_global.log_events_addr = (char*)(&log_events);
+	asus_global.sizeof_log_events=sizeof(log_events);
+	asus_global.log_radio_addr = (char*)(&log_radio);
+	asus_global.sizeof_log_radio=sizeof(log_radio);
+//thomas_chu ---
+#endif
 	return ret;
 }
 
@@ -848,6 +883,7 @@ static void __exit logger_exit(void)
 
 
 device_initcall(logger_init);
+#include "logger_kernel.c"
 module_exit(logger_exit);
 
 MODULE_LICENSE("GPL");

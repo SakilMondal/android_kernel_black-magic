@@ -31,6 +31,17 @@
 #include <linux/completion.h>
 #include <linux/pm_wakeup.h>
 
+//asus report capacity frank ++++
+#include <asm/uaccess.h>
+#include <linux/proc_fs.h>
+#include "asus_battery.h"
+#include <linux/wakelock.h>
+#include <linux/pm_runtime.h>
+#include <linux/alarmtimer.h>
+//asus report capacity frank ----
+
+#include <linux/reboot.h>
+
 #define _SMB1360_MASK(BITS, POS) \
 	((unsigned char)(((1 << (BITS)) - 1) << (POS)))
 #define SMB1360_MASK(LEFT_BIT_POS, RIGHT_BIT_POS) \
@@ -159,7 +170,7 @@
 #define STATUS_1_REG			0x48
 #define AICL_CURRENT_STATUS_MASK	SMB1360_MASK(6, 0)
 #define AICL_LIMIT_1500MA		0xF
-
+#define AICL_LIMIT_1000MA		0xA
 #define STATUS_3_REG			0x4B
 #define CHG_HOLD_OFF_BIT		BIT(3)
 #define CHG_TYPE_MASK			SMB1360_MASK(2, 1)
@@ -252,6 +263,101 @@
 #define SMB1360_POWERON_DELAY_MS	2000
 #define SMB1360_FG_RESET_DELAY_MS	1500
 
+#if defined(ASUS_ZC550KL8939_PROJECT)
+#define THERMAL_DCP_LEVEL	5
+#define THERMAL_SDP_LEVEL	0
+enum usb_mode{
+	USB_DCP_MODE,
+	USB_SDP_MODE
+};
+#endif
+
+#if defined(ASUS_ZC550KL8939_PROJECT)
+#define ADAPTOR_10W_FACTORY_FILE		"/factory/10W"
+#define COUNTRY_CODE_FACTORY_FILE	"/factory/COUNTRY"
+
+struct delayed_work adaptor_10W_check_work;
+struct wake_lock adaptor_10W_check_wake_lock;
+
+#endif
+bool runin_switch_control_off;
+//asus report capacity frank ++++
+int64_t battID =-1;
+static struct smb1360_chip *smb1360_dev;
+static struct alarm bat_alarm;
+struct wake_lock bat_alarm_wake_lock;
+struct delayed_work SetBatRTCWorker;
+struct delayed_work battery_poll_data_work;
+
+static DEFINE_SPINLOCK(bat_alarm_slock);
+DEFINE_MUTEX(g_usb_state_lock);
+DEFINE_MUTEX(g_charging_toggle_lock);
+static bool g_charging_toggle_status = true;
+static int g_usb_state = CABLE_OUT;
+static struct timespec g_last_print_time;
+#define REPORT_CAPACITY_POLLING_TIME (180)
+static struct timespec plugin_time;
+static struct timespec plugout_time;
+//int usbin_check_count=0;
+bool usbin_voltage_poor=false;
+struct battery_info_reply {
+u32 capacity;
+int rawsoc;
+int Rsoc;
+u32 voltage_now;
+int current_now;
+char *temperature_negative_sign;
+int temperature;
+int temperature10;
+u32 cable_status;
+int status;
+int fcc;
+bool charging_toggle;
+int AICL_status;
+};
+struct battery_info_reply batt_info;
+
+#if defined(ASUS_ZC550KL8939_PROJECT)
+extern void asus_otg_chargetype_set(bool sdp);
+extern int g_CHG_mode;
+static int bank_hot_lvl = 0;
+extern uint32_t get_zc550kl_pcb_rev(void);
+#endif
+
+bool smb1360_is_charging(int usb_state);
+bool smb1360_probe_success= false;
+static enum alarmtimer_restart batAlarm_handler(struct alarm *alarm, ktime_t now)
+{
+	printk("[BAT][alarm]batAlarm triggered\n");
+	return ALARMTIMER_NORESTART;
+}
+//asus report capacity frank ----
+int asus_battery_update_status(void);
+//asus bsp frank add smb1360_charging_toggle and runin_switch +++
+int smb1360_charging_toggle(charging_toggle_level_t level, bool on, bool status_flag);
+//asus bsp frank add smb1360_charging_toggle and runin_switch ---
+
+int64_t check_battery_id(void);
+
+#define	Battery_435V	0
+#define	Battery_440V	1
+#define	Battery_438V	2
+
+//ASUS_BSP frank for ChargerDriver stress test +++
+#ifdef CONFIG_I2C_STRESS_TEST
+#include <linux/i2c_testcase.h>
+#define I2C_TEST_SMB1360_FAIL (-1)
+#endif
+//ASUS_BSP frank for ChargerDriver stress test ---
+
+struct wake_lock usbin_wake_lock;
+
+int ac_current =1000;
+
+extern char bl_cmd[2];
+extern void set_tcon_cmd(char*, short);
+
+u8 battery_type;
 enum {
 	WRKRND_FG_CONFIG_FAIL = BIT(0),
 	WRKRND_BATT_DET_FAIL = BIT(1),
@@ -397,7 +503,9 @@ struct smb1360_chip {
 	bool				rsense_10mohm;
 	bool				otg_fet_present;
 	bool				fet_gain_enabled;
+	bool				otp_rslow_config;
 	int				otg_fet_enable_gpio;
+	bool				otp_jeita_hard_config;
 
 	/* status tracking */
 	int				voltage_now;
@@ -454,6 +562,11 @@ struct smb1360_chip {
 	struct work_struct		jeita_hysteresis_work;
 	int				cold_hysteresis;
 	int				hot_hysteresis;
+
+	int otg_enable_gpio;
+	int ovp_enable_gpio;
+	int boost_enable_gpio;
+	uint32_t HW_ID;
 };
 
 static int chg_time[] = {
@@ -509,6 +622,8 @@ static void smb1360_wakeup_src_init(struct smb1360_chip *chip)
 	spin_lock_init(&chip->smb1360_ws.ws_lock);
 	wakeup_source_init(&chip->smb1360_ws.source, "smb1360");
 }
+
+extern void focal_usb_detection(bool plugin);		//ASUS BSP Freeman : notify touch cable in +++
 
 static int is_between(int value, int left, int right)
 {
@@ -1035,6 +1150,8 @@ static int smb1360_float_voltage_set(struct smb1360_chip *chip, int vfloat_mv)
 		return -EINVAL;
 	}
 
+	pr_info("set float_voltage ==> %d \n",vfloat_mv);
+
 	temp = (vfloat_mv - MIN_FLOAT_MV) / VFLOAT_STEP_MV;
 
 	return smb1360_masked_write(chip, BATT_CHG_FLT_VTG_REG,
@@ -1385,7 +1502,7 @@ static int smb1360_set_minimum_usb_current(struct smb1360_chip *chip)
 	int rc = 0;
 
 	if (chip->min_icl_usb100) {
-		pr_debug("USB min current set to 100mA\n");
+		pr_info("USB min current set to 100mA\n");
 		/* set input current limit to minimum (300mA) */
 		rc = smb1360_masked_write(chip, CFG_BATT_CHG_ICL_REG,
 						INPUT_CURR_LIM_MASK,
@@ -1400,7 +1517,7 @@ static int smb1360_set_minimum_usb_current(struct smb1360_chip *chip)
 				pr_err("Couldn't configure for USB100 rc=%d\n",
 								rc);
 	} else {
-		pr_debug("USB min current set to 500mA\n");
+		pr_info("USB min current set to 500mA\n");
 		rc = smb1360_masked_write(chip, CMD_IL_REG,
 				USB_CTRL_MASK, USB_500_BIT);
 		if (rc)
@@ -1437,7 +1554,7 @@ static int __smb1360_parallel_charger_enable(struct smb1360_chip *chip,
 	parallel_psy->set_property(parallel_psy,
 		POWER_SUPPLY_PROP_CHARGING_ENABLED, &pval);
 
-	pr_debug("Parallel-charger %s max_chg_current=%d\n",
+	pr_info("Parallel-charger %s max_chg_current=%d\n",
 		enable ? "enabled" : "disabled",
 		enable ? (chip->max_parallel_chg_current * 1000) : 0);
 
@@ -1454,7 +1571,7 @@ static int smb1360_parallel_charger_enable(struct smb1360_chip *chip,
 	disabled = chip->parallel_chg_disable_status;
 	disabled_status = &chip->parallel_chg_disable_status;
 
-	pr_debug("reason=0x%x requested=%s disabled_status=0x%x\n",
+	pr_info("reason=0x%x requested=%s disabled_status=0x%x\n",
 			reason, enable ? "enable" : "disable", disabled);
 
 	if (enable == true)
@@ -1470,7 +1587,7 @@ static int smb1360_parallel_charger_enable(struct smb1360_chip *chip,
 
 	*disabled_status = disabled;
 
-	pr_debug("disabled_status = %x\n", *disabled_status);
+	pr_info("disabled_status = %x\n", *disabled_status);
 
 	mutex_unlock(&chip->parallel_chg_lock);
 
@@ -1491,7 +1608,7 @@ static void smb1360_parallel_work(struct work_struct *work)
 		goto exit_work;
 	}
 	pr_debug("STATUS_1 (aicl status)=0x%x\n", reg);
-	if ((reg & AICL_CURRENT_STATUS_MASK) == AICL_LIMIT_1500MA) {
+	if ((reg & AICL_CURRENT_STATUS_MASK) == AICL_LIMIT_1000MA && runin_switch_control_off == false) {
 		/* Strong Charger - Enable parallel path */
 		/* find the new fastchg current */
 		chip->fastchg_current += (chip->max_parallel_chg_current / 2);
@@ -1532,10 +1649,10 @@ static int smb1360_set_appropriate_usb_current(struct smb1360_chip *chip)
 	 * not change it
 	 */
 	if (!chip->batt_present) {
-		pr_debug("ignoring current request since battery is absent\n");
+		pr_info("ignoring current request since battery is absent\n");
 		return 0;
 	}
-
+	pr_info("chip->therm_lvl_sel ====> %d \n",chip->therm_lvl_sel);
 	if (chip->therm_lvl_sel > 0
 			&& chip->therm_lvl_sel < (chip->thermal_levels - 1))
 		/*
@@ -1544,8 +1661,24 @@ static int smb1360_set_appropriate_usb_current(struct smb1360_chip *chip)
 		 */
 		therm_ma = chip->thermal_mitigation[chip->therm_lvl_sel];
 	else
-		therm_ma = path_current;
-
+		if(chip->therm_lvl_sel == (chip->thermal_levels - 1))
+			therm_ma = CURRENT_100_MA;
+		else
+			therm_ma = path_current;
+	if(chip->therm_lvl_sel == 2)
+	{
+		if(smb1360_get_prop_batt_capacity(chip) >= 15)
+			therm_ma = 600;
+		else
+			if(smb1360_get_prop_batt_capacity(chip) >= 8 &&smb1360_get_prop_batt_capacity(chip) < 15)
+				therm_ma = 700;
+			else
+				therm_ma = 1400;
+	}
+	else
+		if(chip->therm_lvl_sel == 1)
+			therm_ma = 1400;
+		
 	current_ma = min(therm_ma, path_current);
 
 	if (chip->workaround_flags & WRKRND_HARD_JEITA) {
@@ -1560,7 +1693,7 @@ static int smb1360_set_appropriate_usb_current(struct smb1360_chip *chip)
 		 * SMB1360 does not support USB suspend -
 		 * so set the current-limit to minimum in suspend.
 		 */
-		pr_debug("current_ma=%d <= 2 set USB current to minimum\n",
+		pr_info("current_ma=%d <= 2 set USB current to minimum\n",
 								current_ma);
 		rc = smb1360_set_minimum_usb_current(chip);
 		if (rc < 0)
@@ -1579,7 +1712,7 @@ static int smb1360_set_appropriate_usb_current(struct smb1360_chip *chip)
 			break;
 	}
 	if (i < 0) {
-		pr_debug("Couldn't find ICL mA rc=%d\n", rc);
+		pr_info("Couldn't find ICL mA rc=%d\n", rc);
 		i = 0;
 	}
 	/* set input current limit */
@@ -1588,12 +1721,12 @@ static int smb1360_set_appropriate_usb_current(struct smb1360_chip *chip)
 	if (rc)
 		pr_err("Couldn't set ICL mA rc=%d\n", rc);
 
-	pr_debug("ICL set to = %d\n", input_current_limit[i]);
+	pr_info("ICL set to = %d,current_ma = %d\n", input_current_limit[i],current_ma);
 
 	if ((current_ma <= CURRENT_100_MA) &&
 		((chip->workaround_flags & WRKRND_USB100_FAIL) ||
 				!chip->min_icl_usb100)) {
-		pr_debug("usb100 not supported: usb100_wrkrnd=%d min_icl_100=%d\n",
+		pr_info("usb100 not supported: usb100_wrkrnd=%d min_icl_100=%d\n",
 			!!(chip->workaround_flags & WRKRND_USB100_FAIL),
 						chip->min_icl_usb100);
 		current_ma = CURRENT_500_MA;
@@ -1605,25 +1738,25 @@ static int smb1360_set_appropriate_usb_current(struct smb1360_chip *chip)
 				USB_CTRL_MASK, USB_100_BIT);
 		if (rc)
 			pr_err("Couldn't configure for USB100 rc=%d\n", rc);
-		pr_debug("Setting USB 100\n");
-	} else if (current_ma <= CURRENT_500_MA) {
+		pr_info("Setting USB 100\n");
+	//} else if (current_ma <= CURRENT_500_MA) {
 		/* USB 500 */
-		rc = smb1360_masked_write(chip, CMD_IL_REG,
-				USB_CTRL_MASK, USB_500_BIT);
-		if (rc)
-			pr_err("Couldn't configure for USB500 rc=%d\n", rc);
-		pr_debug("Setting USB 500\n");
+	//	rc = smb1360_masked_write(chip, CMD_IL_REG,
+	//			USB_CTRL_MASK, USB_500_BIT);
+	//	if (rc)
+	//		pr_err("Couldn't configure for USB500 rc=%d\n", rc);
+	//	pr_info("Setting USB 500\n");
 	} else {
 		/* USB AC */
-		if (chip->rsense_10mohm)
-			current_ma /= 2;
+		//if (chip->rsense_10mohm)
+		//	current_ma /= 2;
 
 		for (i = ARRAY_SIZE(fastchg_current) - 1; i >= 0; i--) {
 			if (fastchg_current[i] <= current_ma)
 				break;
 		}
 		if (i < 0) {
-			pr_debug("Couldn't find fastchg mA rc=%d\n", rc);
+			pr_info("Couldn't find fastchg mA rc=%d\n", rc);
 			i = 0;
 		}
 
@@ -1650,7 +1783,7 @@ static int smb1360_set_appropriate_usb_current(struct smb1360_chip *chip)
 		if (rc)
 			pr_err("Couldn't configure for USB AC rc=%d\n", rc);
 
-		pr_debug("fast-chg current set to = %d\n", fastchg_current[i]);
+		pr_info("fast-chg current set to = %d\n", fastchg_current[i]);
 	}
 
 	return rc;
@@ -1844,12 +1977,31 @@ static int smb1360_hard_jeita_otp_init(struct smb1360_chip *chip)
 	return rc;
 }
 
+#if defined(ASUS_ZC550KL8939_PROJECT)
+static int reverse_current_control_thermal(struct smb1360_chip *chip, int lvl_sel)
+{
+	int local_lvl = -1;
+	pr_info("lvl_sel = %d\n", lvl_sel);
+
+	if(local_lvl == lvl_sel)
+		return 0;
+	bank_hot_lvl = lvl_sel;
+	local_lvl = lvl_sel;
+	if(local_lvl == THERMAL_DCP_LEVEL)
+		asus_otg_chargetype_set(USB_SDP_MODE);
+	else if(local_lvl == THERMAL_SDP_LEVEL)
+		asus_otg_chargetype_set(USB_DCP_MODE);
+
+	return 0;
+}
+#endif
+
 static int smb1360_system_temp_level_set(struct smb1360_chip *chip,
 							int lvl_sel)
 {
 	int rc = 0;
 	int prev_therm_lvl;
-
+	pr_info("start; lvl_sel = %d\n", lvl_sel);
 	if (!chip->thermal_mitigation) {
 		pr_err("Thermal mitigation not supported\n");
 		return -EINVAL;
@@ -1859,7 +2011,13 @@ static int smb1360_system_temp_level_set(struct smb1360_chip *chip,
 		pr_err("Unsupported level selected %d\n", lvl_sel);
 		return -EINVAL;
 	}
-
+#if defined(ASUS_ZC550KL8939_PROJECT)
+	if((chip->HW_ID == ZC550KL_8939_ER || chip->HW_ID == ZC550KL_8939_PR) && (g_CHG_mode == 2)){
+		rc = reverse_current_control_thermal(chip, lvl_sel);
+		pr_info("in otg mode!\n");
+		return 0;
+	}
+#endif
 	if (lvl_sel >= chip->thermal_levels) {
 		pr_err("Unsupported level selected %d forcing %d\n", lvl_sel,
 				chip->thermal_levels - 1);
@@ -1872,7 +2030,6 @@ static int smb1360_system_temp_level_set(struct smb1360_chip *chip,
 	mutex_lock(&chip->current_change_lock);
 	prev_therm_lvl = chip->therm_lvl_sel;
 	chip->therm_lvl_sel = lvl_sel;
-
 	if (chip->therm_lvl_sel == (chip->thermal_levels - 1)) {
 		rc = smb1360_set_minimum_usb_current(chip);
 		if (rc)
@@ -1952,7 +2109,8 @@ static int smb1360_battery_get_property(struct power_supply *psy,
 		val->intval = smb1360_get_prop_batt_present(chip);
 		break;
 	case POWER_SUPPLY_PROP_STATUS:
-		val->intval = smb1360_get_prop_batt_status(chip);
+		val->intval = asus_battery_update_status();
+		//val->intval = smb1360_get_prop_batt_status(chip);
 		break;
 	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
 		val->intval = !chip->charging_disabled_status;
@@ -1962,9 +2120,19 @@ static int smb1360_battery_get_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_CAPACITY:
 		val->intval = smb1360_get_prop_batt_capacity(chip);
+		if(val->intval == 0 && smb1360_get_prop_batt_temp(chip) < 0 && g_ASUS_bootmode == USER_MODE)
+		{
+			val->intval = 50;
+		}
+/*#if defined(ASUS_ZC550KL8939_PROJECT)
+		if(g_CHG_mode == 2 && (chip->HW_ID == ZC550KL_8939_ER || chip->HW_ID == ZC550KL_8939_PR) 
+			&& val->intval <= 40)
+			asus_otg_chargetype_set(USB_SDP_MODE);
+#endif*/
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN:
 		val->intval = smb1360_get_prop_chg_full_design(chip);
+		val->intval = 5000;
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
 		val->intval = smb1360_get_prop_voltage_now(chip);
@@ -1979,6 +2147,12 @@ static int smb1360_battery_get_property(struct power_supply *psy,
 		val->intval = smb1360_get_prop_batt_temp(chip);
 		break;
 	case POWER_SUPPLY_PROP_SYSTEM_TEMP_LEVEL:
+#if defined(ASUS_ZC550KL8939_PROJECT)
+		if(g_CHG_mode == 2){
+			val->intval = bank_hot_lvl;
+			break;
+		}
+#endif
 		val->intval = chip->therm_lvl_sel;
 		break;
 	default:
@@ -2001,10 +2175,10 @@ static void smb1360_external_power_changed(struct power_supply *psy)
 			"could not read USB current_max property, rc=%d\n", rc);
 	else
 		current_limit = prop.intval / 1000;
-
+		
 	pr_debug("current_limit = %d\n", current_limit);
-
-	if (chip->usb_psy_ma != current_limit) {
+/*+++BSP frank add asus_set_charger +++  remove set_appropriate_usb_current*/
+/*	if (chip->usb_psy_ma != current_limit) {
 		mutex_lock(&chip->current_change_lock);
 		chip->usb_psy_ma = current_limit;
 		rc = smb1360_set_appropriate_usb_current(chip);
@@ -2012,7 +2186,8 @@ static void smb1360_external_power_changed(struct power_supply *psy)
 			pr_err("Couldn't set usb current rc = %d\n", rc);
 		mutex_unlock(&chip->current_change_lock);
 	}
-
+*/
+/*---BSP frank add asus_set_charger ---*/
 	rc = chip->usb_psy->get_property(chip->usb_psy,
 				POWER_SUPPLY_PROP_ONLINE, &prop);
 	if (rc < 0)
@@ -2021,7 +2196,8 @@ static void smb1360_external_power_changed(struct power_supply *psy)
 	/* update online property */
 	rc = 0;
 	if (chip->usb_present && !chip->charging_disabled_status
-					&& chip->usb_psy_ma != 0) {
+					//&& chip->usb_psy_ma != 0) {
+					&& g_usb_state == USB_IN) {
 		if (prop.intval == 0)
 			rc = power_supply_set_online(chip->usb_psy, true);
 	} else {
@@ -2298,21 +2474,46 @@ static int chg_fastchg_handler(struct smb1360_chip *chip, u8 rt_stat)
 static int usbin_uv_handler(struct smb1360_chip *chip, u8 rt_stat)
 {
 	bool usb_present = !rt_stat;
-
-	pr_debug("chip->usb_present = %d usb_present = %d\n",
+	static long time_cal = 0;
+	pr_info("chip->usb_present = %d usb_present = %d\n",
 				chip->usb_present, usb_present);
 	if (chip->usb_present && !usb_present) {
 		/* USB removed */
 		chip->usb_present = usb_present;
 		power_supply_set_present(chip->usb_psy, usb_present);
+		focal_usb_detection(false);
+		plugout_time = current_kernel_time();
 	}
 
 	if (!chip->usb_present && usb_present) {
 		/* USB inserted */
 		chip->usb_present = usb_present;
 		power_supply_set_present(chip->usb_psy, usb_present);
+		focal_usb_detection(true);
+		plugin_time = current_kernel_time();
+		time_cal = plugin_time.tv_sec - plugout_time.tv_sec;
+		time_cal = time_cal * 1000000000 + (plugin_time.tv_nsec - plugout_time.tv_nsec);
+		pr_info("time_cal ====> %ld\n",time_cal);
+		if ( time_cal <= 100000000 ){
+			//usbin_check_count ++;
+			//if(usbin_check_count >= 3)
+			//{
+					usbin_voltage_poor = true;
+					pr_info("usbin voltage is poor!\n");
+			//}
+		}
+		else
+		{
+			//usbin_check_count = 0;
+			usbin_voltage_poor = false;
+		}
 	}
-
+	
+	if(smb1360_probe_success == true)
+		wake_lock_timeout(&usbin_wake_lock, 3*HZ);
+	else
+		pr_info("usbin_wake_lock = NULL \n");
+	
 	return 0;
 }
 
@@ -2486,6 +2687,117 @@ static int smb1360_adjust_current_gain(struct smb1360_chip *chip,
 
 	return 0;
 }
+static int smb1360_otp_rslow_cfg(struct smb1360_chip *chip)
+{
+	int rc, i;
+	u8 address, data;
+	u8 reg_val_mapping_standalone[][2] = {
+			{0xE0, 0x54},
+			{0xE1, 0x18},
+			{0xE2, 0x55},
+			{0xE3, 0x6A},
+			{0xE4, 0x56},
+			{0xE5, 0x4C},
+			{0xE6, 0x57},
+			{0xE7, 0x6A},
+			{0xF0, 0xAA},
+			{0xF1, 0x00},
+	};
+	u8 reg_val_mapping_w_rsense[][2] = {
+			{0xE4, 0x54},
+			{0xE5, 0x18},
+			{0xE6, 0x55},
+			{0xE7, 0x6A},
+			{0xE8, 0x56},
+			{0xE9, 0x4C},
+			{0xEA, 0x57},
+			{0xEB, 0x6A},
+			{0xF0, 0x5A},
+			{0xF1, 0xA0},
+	};
+
+	for (i = 0; i < ARRAY_SIZE(reg_val_mapping_standalone); i++) {
+
+		if (chip->rsense_10mohm || chip->otg_fet_present) {
+			address = reg_val_mapping_w_rsense[i][0];
+			data = reg_val_mapping_w_rsense[i][1];
+		} else {
+			address = reg_val_mapping_standalone[i][0];
+			data = reg_val_mapping_standalone[i][1];
+		}
+
+		pr_debug("Writing reg_add=%x value=%x\n", address, data);
+
+		rc = smb1360_fg_write(chip, address, data);
+		if (rc) {
+			pr_err("Write fg address 0x%x failed, rc = %d\n",
+						address, rc);
+			return rc;
+		}
+	}
+
+	return 0;
+}
+
+static int smb1360_otp_jeita_hard_config(struct smb1360_chip *chip)
+{
+	int rc, i;
+	u8 address, data;
+	u8 reg_val_mapping_standalone[][2] = {
+			{0xE0, 0x13},
+			{0xE1, 0x5A}, /* hot @ 60C */
+			{0xF0, 0x40},
+	};
+
+	u8 reg_val_mapping_w_rsense[][2] = {
+			{0xE4, 0x13},
+			{0xE5, 0x5A}, /* hoy @ 60C */
+			{0xF0, 0x54}
+	};
+
+	u8 reg_val_mapping_w_rslow[][2] = {
+			{0xE8, 0x13},
+			{0xE9, 0x5A}, /* hoy @ 60C */
+			{0xF1, 0x40}
+	};
+
+	u8 reg_val_mapping_w_rsense_rslow[][2] = {
+			{0xEC, 0x13},
+			{0xED, 0x5A},
+			{0xF1, 0xA4},
+	};
+
+	pr_debug("Setting hard-jeita rsense=%d otg_fet_gain=%d\n",
+				chip->rsense_10mohm, chip->otg_fet_present);
+
+	for (i = 0; i < ARRAY_SIZE(reg_val_mapping_standalone); i++) {
+
+		if (!chip->rsense_10mohm && !chip->otg_fet_present) {
+			address = reg_val_mapping_standalone[i][0];
+			data = reg_val_mapping_standalone[i][1];
+		} else if (chip->rsense_10mohm && chip->otg_fet_present) {
+			address = reg_val_mapping_w_rsense_rslow[i][0];
+			data = reg_val_mapping_w_rsense_rslow[i][1];
+		} else if (chip->rsense_10mohm && !chip->otg_fet_present) {
+			address = reg_val_mapping_w_rsense[i][0];
+			data = reg_val_mapping_w_rsense[i][1];
+		} else if (!chip->rsense_10mohm && chip->otg_fet_present) {
+			address = reg_val_mapping_w_rslow[i][0];
+			data = reg_val_mapping_w_rslow[i][1];
+		}
+
+		pr_debug("Writing reg_add=%x value=%x\n", address, data);
+
+		rc = smb1360_fg_write(chip, address, data);
+		if (rc) {
+			pr_err("Write fg address 0x%x failed, rc = %d\n",
+						address, rc);
+			return rc;
+		}
+	}
+
+	return 0;
+}
 
 static int smb1360_otp_gain_config(struct smb1360_chip *chip, int gain_factor)
 {
@@ -2504,10 +2816,27 @@ static int smb1360_otp_gain_config(struct smb1360_chip *chip, int gain_factor)
 		goto restore_fg;
 	}
 
-	rc = smb1360_adjust_current_gain(chip, gain_factor);
-	if (rc) {
-		pr_err("Unable to modify current gain rc=%d\n", rc);
-		goto restore_fg;
+	if (chip->rsense_10mohm || chip->otg_fet_present) {
+		rc = smb1360_adjust_current_gain(chip, gain_factor);
+		if (rc) {
+			pr_err("Unable to modify current gain rc=%d\n", rc);
+			goto restore_fg;
+		}
+	}
+	if (chip->otp_rslow_config) {
+		rc = smb1360_otp_rslow_cfg(chip);
+		if (rc) {
+			pr_err("Unable configure OTP for rlsow rc=%d\n", rc);
+			goto restore_fg;
+		}
+	}
+
+	if (chip->otp_jeita_hard_config) {
+		rc = smb1360_otp_jeita_hard_config(chip);
+		if (rc) {
+			pr_err("Unable configure OTP for jeita rc=%d\n", rc);
+			goto restore_fg;
+		}
 	}
 
 	rc = smb1360_masked_write(chip, CFG_FG_BATT_CTRL_REG,
@@ -3407,28 +3736,28 @@ static int smb1360_regulator_init(struct smb1360_chip *chip)
 
 	return rc;
 }
+int check_CSIR_function(void);
 
 static int smb1360_check_batt_profile(struct smb1360_chip *chip)
 {
 	int rc, i, timeout = 50;
 	u8 reg = 0, loaded_profile, new_profile = 0, bid_mask;
 
-	if (!chip->connected_rid) {
+	/*if (!chip->connected_rid) {
 		pr_debug("Skip batt-profile loading connected_rid=%d\n",
 						chip->connected_rid);
 		return 0;
-	}
+	}*/
 
 	rc = smb1360_read(chip, SHDW_FG_BATT_STATUS, &reg);
 	if (rc) {
 		pr_err("Couldn't read FG_BATT_STATUS rc=%d\n", rc);
 		return rc;
 	}
-
 	loaded_profile = !!(reg & BATTERY_PROFILE_BIT) ?
 			BATTERY_PROFILE_B : BATTERY_PROFILE_A;
 
-	pr_debug("fg_batt_status=%x loaded_profile=%d\n", reg, loaded_profile);
+	pr_info("fg_batt_status=%x loaded_profile=%d\n", reg, loaded_profile);
 
 	for (i = 0; i < BATTERY_PROFILE_MAX; i++) {
 		pr_debug("profile=%d profile_rid=%d connected_rid=%d\n", i,
@@ -3439,7 +3768,7 @@ static int smb1360_check_batt_profile(struct smb1360_chip *chip)
 			break;
 	}
 
-	if (i == BATTERY_PROFILE_MAX) {
+	/*if (i == BATTERY_PROFILE_MAX) {
 		pr_err("None of the battery-profiles match the connected-RID\n");
 		return 0;
 	} else {
@@ -3454,8 +3783,32 @@ static int smb1360_check_batt_profile(struct smb1360_chip *chip)
 			pr_info("Loaded Profile-RID != connected-RID, switch-profile old_profile=%d new_profile=%d\n",
 						loaded_profile, new_profile);
 		}
+	}*/
+	if(loaded_profile == 0)
+	{
+		if(check_CSIR_function() == 0x2334 )
+		{
+			pr_info("loaded profile is profile A ,skip ! \n");
+			return 0;
+		}
+		else
+		{
+			pr_info("must load battery profile B! \n");
+			bid_mask = BATT_PROFILEB_MASK;
+		}
 	}
-
+	else
+	{	if(check_CSIR_function() == 0x2334 )
+		{
+			pr_info("must load battery profile A! \n");
+			bid_mask = BATT_PROFILEA_MASK;
+		}
+		else
+		{
+			pr_info("loaded profile is profileB ,skip ! \n");
+			return 0;
+		}
+	}	
 	/* set the BID mask */
 	rc = smb1360_masked_write(chip, CFG_FG_BATT_CTRL_REG,
 				BATT_PROFILE_SELECT_MASK, bid_mask);
@@ -3506,7 +3859,7 @@ static int smb1360_check_batt_profile(struct smb1360_chip *chip)
 		pr_err("New profile could not be loaded\n");
 		return -EBUSY;
 	}
-
+	
 	return 0;
 
 restore_fg:
@@ -3578,6 +3931,21 @@ static int determine_initial_status(struct smb1360_chip *chip)
 
 	chip->usb_present = (reg & IRQ_E_USBIN_UV_BIT) ? false : true;
 	power_supply_set_present(chip->usb_psy, chip->usb_present);
+
+	if(chip->usb_present == 1)
+		focal_usb_detection(true);
+	else
+	{
+		focal_usb_detection(false);
+	}
+
+	if(chip->usb_present==0 && g_Charger_mode)
+	{
+        bl_cmd[1] = 0x0;
+        set_tcon_cmd(bl_cmd, ARRAY_SIZE(bl_cmd));
+		//kernel_power_off();
+		orderly_poweroff(true);
+	}
 
 	return 0;
 }
@@ -3881,7 +4249,7 @@ static void smb1360_check_feature_support(struct smb1360_chip *chip)
 {
 
 	if (is_usb100_broken(chip)) {
-		pr_debug("USB100 is not supported\n");
+		pr_info("USB100 is not supported\n");
 		chip->workaround_flags |= WRKRND_USB100_FAIL;
 	}
 
@@ -4012,6 +4380,9 @@ static int smb1360_otp_gain_init(struct smb1360_chip *chip)
 		gain_factor = 2;
 		otp_gain_config = true;
 	}
+
+	if (chip->otp_jeita_hard_config)
+		otp_gain_config = true;
 
 	mutex_lock(&chip->otp_gain_lock);
 	if (chip->otg_fet_present) {
@@ -4527,7 +4898,7 @@ static int smb1360_parse_jeita_params(struct smb1360_chip *chip)
 		}
 
 		chip->config_hard_thresholds = true;
-		pr_debug("config_hard_thresholds = %d, cold_bat_decidegc = %d, hot_bat_decidegc = %d\n",
+		pr_info("config_hard_thresholds = %d, cold_bat_decidegc = %d, hot_bat_decidegc = %d\n",
 			chip->config_hard_thresholds, chip->cold_bat_decidegc,
 			chip->hot_bat_decidegc);
 	} else if (of_property_read_bool(node, "qcom,otp-hard-jeita-config")) {
@@ -4594,13 +4965,18 @@ static int smb1360_parse_jeita_params(struct smb1360_chip *chip)
 			return -EINVAL;
 		}
 
+		if(battery_type == Battery_438V)
+			chip->cool_bat_mv = 4380;
+		else
+			chip->cool_bat_mv = 4350;
+
 		rc = of_property_read_u32(node, "qcom,warm-bat-mv",
 						&chip->warm_bat_mv);
 		if (rc) {
 			pr_err("warm_bat_mv property error, rc = %d\n", rc);
 			return -EINVAL;
 		}
-
+		
 		rc = of_property_read_u32(node, "qcom,cool-bat-ma",
 						&chip->cool_bat_ma);
 		if (rc) {
@@ -4652,12 +5028,16 @@ static int smb1360_parse_parallel_charging_params(struct smb1360_chip *chip)
 			pr_err("10mohm-rsense configuration not enabled - parallel-charging disabled\n");
 			return 0;
 		}
-		chip->parallel_charging = true;
+
+		//chip->parallel_charging = true;
+		// set parallel charging default disable for india 5W
+		chip->parallel_charging = false;
+
 		chip->max_parallel_chg_current = MAX_PARALLEL_CURRENT;
 		of_property_read_u32(node, "qcom,max-parallel-current-ma",
 					&chip->max_parallel_chg_current);
 
-		pr_debug("Max parallel charger current = %dma\n",
+		pr_info("Max parallel charger current = %dma\n",
 				chip->max_parallel_chg_current);
 
 		/* mark the parallel-charger as disabled */
@@ -4676,9 +5056,17 @@ static int smb_parse_dt(struct smb1360_chip *chip)
 		dev_err(chip->dev, "device tree info. missing\n");
 		return -EINVAL;
 	}
+/**
+	chip->HW_ID = of_property_read_bool(node,"ZC550KL-8939-ER-device");
+**/
+	chip->HW_ID = get_zc550kl_pcb_rev();	
+	pr_info("load on HW_ID=%d\n", chip->HW_ID);
 
 	chip->rsense_10mohm = of_property_read_bool(node, "qcom,rsense-10mhom");
-
+	chip->otp_rslow_config = of_property_read_bool(node,
+						"qcom,otp-rslow-cfg");
+	chip->otp_jeita_hard_config = of_property_read_bool(node,
+						"qcom,otp-jeita-hard");
 	if (of_property_read_bool(node, "qcom,batt-profile-select")) {
 		rc = smb_parse_batt_id(chip);
 		if (rc < 0) {
@@ -4717,7 +5105,12 @@ static int smb_parse_dt(struct smb1360_chip *chip)
 						&chip->vfloat_mv);
 	if (rc < 0)
 		chip->vfloat_mv = -EINVAL;
-
+	
+	if(battery_type == Battery_438V)
+		chip->vfloat_mv = 4380;
+	else
+		chip->vfloat_mv = 4350;
+	
 	rc = of_property_read_u32(node, "qcom,charging-timeout",
 						&chip->safety_time);
 	if (rc < 0)
@@ -4740,7 +5133,12 @@ static int smb_parse_dt(struct smb1360_chip *chip)
 	rc = of_property_read_u32(node, "qcom,iterm-ma", &chip->iterm_ma);
 	if (rc < 0)
 		chip->iterm_ma = -EINVAL;
-
+	
+	if(battery_type == Battery_438V)
+		chip->iterm_ma = 200;
+	else
+		chip->iterm_ma = 150;
+	
 	chip->iterm_disabled = of_property_read_bool(node,
 						"qcom,iterm-disabled");
 
@@ -4859,10 +5257,34 @@ static int smb_parse_dt(struct smb1360_chip *chip)
 	if (rc < 0)
 		chip->fg_cc_to_cv_mv = -EINVAL;
 
+	if(battery_type == Battery_438V)
+               chip->fg_cc_to_cv_mv = 4360;
+       else
+               chip->fg_cc_to_cv_mv = 4330;
+
 	rc = of_property_read_u32(node, "qcom,otg-batt-curr-limit",
 					&chip->otg_batt_curr_limit);
 	if (rc < 0)
 		chip->otg_batt_curr_limit = -EINVAL;
+
+	{
+#ifdef ASUS_ZC550KL8916_PROJECT
+
+		int new_pcb;
+
+		new_pcb= of_get_named_gpio(chip->dev->of_node, "new_pcb_gpio", 0);
+
+		if (new_pcb < 0)
+			pr_err("new_pcb_gpio is not available\n");
+		else {
+			printk(" new_pcb_gpio ====> %d\n", gpio_get_value(new_pcb));
+		}
+
+		if(gpio_get_value(new_pcb) == 0)
+			chip->otg_batt_curr_limit = 950;
+
+#endif
+	}
 
 	rc = of_property_read_u32(node, "qcom,fg-auto-recharge-soc",
 					&chip->fg_auto_recharge_soc);
@@ -4881,7 +5303,1198 @@ static int smb_parse_dt(struct smb1360_chip *chip)
 
 	return 0;
 }
+//asus report capacity frank ++++
 
+static inline struct power_supply *get_psy_battery(void)
+{
+	struct class_dev_iter iter;
+	struct device *dev;
+	static struct power_supply *pst;
+
+	class_dev_iter_init(&iter, power_supply_class, NULL, NULL);
+	while ((dev = class_dev_iter_next(&iter))) {
+		pst = (struct power_supply *)dev_get_drvdata(dev);
+		if (pst->type == POWER_SUPPLY_TYPE_BATTERY) {
+			class_dev_iter_exit(&iter);
+			return pst;
+		}
+	}
+	class_dev_iter_exit(&iter);
+
+	return NULL;
+}
+extern bool get_sw_charging_toggle(void)
+{
+	bool ret;
+
+	mutex_lock(&g_charging_toggle_lock);
+	ret = g_charging_toggle_status;
+	mutex_unlock(&g_charging_toggle_lock);
+
+	return ret;
+}
+extern int get_charger_type(void)
+{
+	int ret;
+
+	if (!smb1360_dev) {
+		pr_err("Warning: smb358_dev is null due to probe function has error\n");
+		return -1;
+	}
+	ret = g_usb_state;
+	return ret;
+}
+int asus_battery_update_status(void)
+{
+	int status = POWER_SUPPLY_STATUS_UNKNOWN;
+
+	if (smb1360_dev->usb_present == 1 &&smb1360_get_prop_batt_capacity(smb1360_dev) ==100) 
+	{
+		status = POWER_SUPPLY_STATUS_FULL;
+	}
+	else if (smb1360_dev->usb_present == 0 &&smb1360_get_prop_batt_capacity(smb1360_dev) ==100)
+	{
+		status = POWER_SUPPLY_STATUS_DISCHARGING;
+	}
+	else
+		status = smb1360_get_prop_batt_status(smb1360_dev);
+
+	return status;
+}
+int get_AICL_status(void)
+{
+	int rc;
+	u8 reg = 0;
+
+	rc = smb1360_read(smb1360_dev, FIRST_STATUS_REG, &reg);
+	if (rc) {
+		pr_err("Couldn't read FIRST_STATUS_REG rc=%d\n", rc);
+		return 0;
+	}
+
+	return reg;
+}
+static int asus_update_all(void)
+{
+	struct power_supply *psy;
+	union power_supply_propval val;
+	int ret;
+	int batt_temp;
+	int charging_status;
+
+	psy = get_psy_battery();
+	if (!psy) {
+		BAT_DBG_E("%s: can't get battery psy!\n", __FUNCTION__);
+		return -EINVAL;
+	}
+	ret = psy->get_property(psy, POWER_SUPPLY_PROP_CAPACITY, &val);
+	if (!ret) {
+		batt_info.capacity = val.intval;
+	} else{
+		BAT_DBG_E("%s: can't get capacity, ret = %d!\n", __FUNCTION__, ret);
+		batt_info.capacity = ret;
+	}
+	ret = psy->get_property(psy, POWER_SUPPLY_PROP_VOLTAGE_NOW, &val);
+	if (!ret) {
+		batt_info.voltage_now = val.intval /1000;
+	} else{
+		BAT_DBG_E("%s: can't get voltage_now, ret = %d!\n", __FUNCTION__, ret);
+		batt_info.voltage_now = ret;
+	}
+	ret = psy->get_property(psy, POWER_SUPPLY_PROP_CURRENT_NOW, &val);
+	if (!ret) {
+		batt_info.current_now = val.intval / 1000;
+	} else{
+		BAT_DBG_E("%s: can't get current_now, ret = %d!\n", __FUNCTION__, ret);
+		batt_info.current_now = ret;
+	}
+	ret = psy->get_property(psy, POWER_SUPPLY_PROP_TEMP, &val);
+	if (!ret) {
+		batt_temp = val.intval;
+		if (batt_temp >= 10 || batt_temp <= -10) {
+			batt_info.temperature10 = batt_temp / 10;
+			batt_info.temperature = batt_temp - (batt_info.temperature10 * 10);
+			if (batt_info.temperature < 0) {
+				batt_info.temperature = -batt_info.temperature;
+			}
+			batt_info.temperature_negative_sign = "";
+		} else {
+			batt_info.temperature10 = 0;
+			batt_info.temperature = batt_temp < 0 ? -batt_temp : batt_temp;
+			if (batt_temp >= 0) {
+				batt_info.temperature_negative_sign = "";
+			}
+		}
+	} else{
+		BAT_DBG_E("%s: can't get bat_temp, ret = %d!\n", __FUNCTION__, ret);
+		batt_temp = ret;
+	}
+
+	ret = psy->get_property(psy, POWER_SUPPLY_PROP_STATUS, &val);
+	if (!ret) {
+		batt_info.status = val.intval;
+	} else{
+		BAT_DBG_E("%s: can't get charging_status, ret = %d!\n", __FUNCTION__, ret);
+		charging_status = ret;
+	}
+	//ret = get_bms_calculated_soc(&batt_info.rawsoc);
+	//if (ret < 0) {
+		//BAT_DBG_E("%s: can't get raw bms soc, ret = %d\n", __FUNCTION__, ret);
+	//}
+	batt_info.rawsoc = smb1360_get_prop_batt_capacity(smb1360_dev);
+	batt_info.cable_status = get_charger_type();
+	batt_info.charging_toggle = get_sw_charging_toggle();
+	//batt_info.fcc = get_vm_bms_fcc();
+	batt_info.Rsoc =smb1360_get_prop_batt_capacity(smb1360_dev);
+	batt_info.AICL_status = get_AICL_status();
+	return 0;
+}
+static int asus_print_all(void)
+{
+	int ret;
+	//char chargerReg[128] = "";
+	char battInfo[256];
+	/*  UNKN means UNKOWN, CHRG mean CHARGING, DISC means DISCHARGING,
+	    NOTC means NOT CHARGING
+	*/
+	char batt_status_str[5][5] = {
+		"UNKN",
+		"CHRG",
+		"DISC",
+		"NOTC",
+		"FULL"
+	};
+	char cable_status_str[8][5] = {
+		"USB",
+		"AC",
+		"NO",
+		"EN5V",
+		"DS5V",
+		"PAD",
+		"UNKN",
+		"SE1",
+	};
+	ret = asus_update_all();
+	if (ret < 0) {
+		BAT_DBG_E("%s: can't update battery info!\n", __FUNCTION__);
+		return -1;
+	}
+	//ChargerRegDump(chargerReg, 128);
+	battID = check_battery_id();
+	snprintf(battInfo, sizeof(battInfo), "report Capacity ==>%d, FCC:%dmAh, BMS:%d, V:%dmV, Cur:%dmA, ",
+		batt_info.capacity,
+		batt_info.fcc,
+		batt_info.capacity,
+		batt_info.voltage_now,
+		batt_info.current_now);
+	snprintf(battInfo, sizeof(battInfo), "%sTemp:%s%d.%dC, Cable:%d(%s), Status:%s, Charging:%s, Rsoc:%d, BATID:%lld, TLevel:%d, ",
+		battInfo,
+		batt_info.temperature_negative_sign,
+		batt_info.temperature10,
+		batt_info.temperature,
+		batt_info.cable_status,
+		cable_status_str[batt_info.cable_status],
+		batt_status_str[batt_info.status],
+		batt_info.charging_toggle ? "ON" : "OFF",
+		batt_info.Rsoc,
+		battID,
+		smb1360_dev->therm_lvl_sel);
+	snprintf(battInfo, sizeof(battInfo), "%sAICL register(0x48):0x%X\n",
+		battInfo,
+		batt_info.AICL_status);
+	ASUSEvtlog("[BAT][Ser]%s", battInfo);
+	BAT_DBG("%s", battInfo);
+	g_last_print_time = current_kernel_time();
+	return 0;
+}
+void asus_polling_battery_data_work(int time)
+{
+	cancel_delayed_work(&battery_poll_data_work);
+	schedule_delayed_work(&battery_poll_data_work, time * HZ);
+}
+void asus_polling_data(struct work_struct *dat)
+{
+	int ret;
+	int usb_state;
+	usb_state = g_usb_state;
+	ret = asus_print_all();
+	
+	if(smb1360_dev->therm_lvl_sel==2)
+		smb1360_set_appropriate_usb_current(smb1360_dev);
+	
+	/*BSP david: if report capacity fail, do it after 5s*/
+	if (!ret) {
+		if(batt_info.capacity > 15)
+			asus_polling_battery_data_work(180);
+		else
+			asus_polling_battery_data_work(60);
+		if (!smb1360_is_charging(usb_state)) {
+			schedule_delayed_work(&SetBatRTCWorker, 0);
+		}
+	} else{
+		printk("%s: gauge not ready yet, delay 5s!\n", __FUNCTION__);
+		asus_polling_battery_data_work(5);
+	}
+}
+
+static inline int get_battery_rsoc(int *rsoc)
+{
+	struct power_supply *psy;
+	union power_supply_propval val;
+	int ret;
+
+	psy = get_psy_battery();
+	if (!psy)
+		return -EINVAL;
+
+	ret = psy->get_property(psy, POWER_SUPPLY_PROP_CAPACITY, &val);
+	if (!ret)
+		*rsoc = val.intval;
+
+	return ret;
+}
+void BatTriggeredSetRTC(struct work_struct *dat)
+{
+	unsigned long batflags;
+	struct timespec new_batAlarm_time;
+	struct timespec mtNow;
+	int RTCSetInterval = 180;
+	int cableType;
+	int soc;
+	int ret;
+
+	if (!smb1360_dev) {
+		BAT_DBG("%s: driver not ready yet!\n", __FUNCTION__);
+		return;
+	}
+
+	mtNow = current_kernel_time();
+	new_batAlarm_time.tv_sec = 0;
+	new_batAlarm_time.tv_nsec = 0;
+
+	cableType = get_charger_type();
+
+	if (smb1360_is_charging(cableType)) {
+		RTCSetInterval = 60;
+	} else{
+		ret = get_battery_rsoc(&soc);
+		if (!ret) {
+			if (soc <= 1) {
+				RTCSetInterval = 300;
+			} else{
+				RTCSetInterval = soc * 450;
+				if (RTCSetInterval < 450) {
+					RTCSetInterval = 450;
+				}
+				if (RTCSetInterval > 36000) {
+					RTCSetInterval = 36000;
+				}
+			}
+		} else{
+			BAT_DBG_E("%s: NO SOC INFO! Set minimum alarm time!\n", __FUNCTION__);
+			RTCSetInterval = 300;
+		}
+	}
+	new_batAlarm_time.tv_sec = mtNow.tv_sec + RTCSetInterval;
+	BAT_DBG("%s: alarm start after %ds\n", __FUNCTION__, RTCSetInterval);
+	spin_lock_irqsave(&bat_alarm_slock, batflags);
+	alarm_start(&bat_alarm,
+		timespec_to_ktime(new_batAlarm_time));
+	spin_unlock_irqrestore(&bat_alarm_slock, batflags);
+}
+bool smb1360_is_charging(int usb_state)
+{	
+	if (usb_state == USB_IN || usb_state == AC_IN ||usb_state == UNKNOWN_IN || usb_state == SE1_IN || usb_state == PAD_SUPPLY) {
+		return true;
+	} else{
+		return false;
+	}
+}
+//asus report capacity frank ----
+/*+++BSP frank AC power supply+++*/
+static char *supply_list[] = {
+	"battery",
+};
+
+static enum power_supply_property asus_power_properties[] = {
+	POWER_SUPPLY_PROP_PRESENT,
+	POWER_SUPPLY_PROP_ONLINE,
+};
+
+
+static int smb1360_power_get_property(struct power_supply *psy,
+		enum power_supply_property psp,
+		union power_supply_propval *val)
+{
+	int ret = 0;
+	int usb_state;
+	usb_state = g_usb_state;
+	switch (psp) {
+	case POWER_SUPPLY_PROP_ONLINE:
+	case POWER_SUPPLY_PROP_PRESENT:
+		val->intval = (usb_state == AC_IN || usb_state == UNKNOWN_IN || usb_state == SE1_IN) ? 1 : 0;
+		break;
+	default:
+		ret = -EINVAL;
+	}
+	return ret;
+}
+static struct power_supply smb1360_power_supplies[] = {
+	{
+		.name = "ac",
+		.type = POWER_SUPPLY_TYPE_MAINS,
+		.supplied_to = supply_list,
+		.num_supplicants = ARRAY_SIZE(supply_list),
+		.properties = asus_power_properties,
+		.num_properties = ARRAY_SIZE(asus_power_properties),
+		.get_property = smb1360_power_get_property,
+	},
+};
+static int smb1360_register_power_supply(struct device *dev)
+{
+	int ret;
+	ret = power_supply_register(dev, &smb1360_power_supplies[0]);
+	if (ret) {
+		BAT_DBG_E("Fail to register power supply AC\n");
+		goto batt_err_reg_fail_ac;
+	}
+	return 0;
+
+batt_err_reg_fail_ac:
+	power_supply_unregister(&smb1360_power_supplies[0]);
+	return ret;
+}
+/*---BSP frank AC power supply---*/
+/*+++BSP frank add asus_set_charger +++*/
+int set_otg_battery_current_limit(int value)
+{
+	int i,rc;
+	for (i = 0; i < ARRAY_SIZE(otg_curr_ma); i++) {
+			if (otg_curr_ma[i] >= value)
+				break;
+		}
+
+	if (i == ARRAY_SIZE(otg_curr_ma))
+		i = i - 1;
+
+	pr_info("set otg battery current limit ====> %d \n",otg_curr_ma[i]);
+
+	rc = smb1360_masked_write(smb1360_dev, CFG_BATT_CHG_REG,
+						OTG_CURRENT_MASK,
+					i << OTG_CURRENT_SHIFT);
+	if (rc)
+	{
+		pr_err("Couldn't set OTG current limit, rc = %d\n", rc);
+		return rc;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(set_otg_battery_current_limit);
+static int set_otg(int toggle)
+{
+	int ret;
+
+	if (!smb1360_dev) {
+		pr_info("Warning: smb1360_dev is null due to probe function has error\n");
+		return 1;
+	}
+
+	if(smb1360_dev->HW_ID == ZC550KL_8939_ER || smb1360_dev->HW_ID == ZC550KL_8939_PR)
+	{
+		pr_info("start to set otg ====> %d \n",toggle);
+
+		if(toggle)
+		{
+			smb1360_charging_toggle(FLAGS, false, true);
+
+			ret = gpio_direction_output(smb1360_dev->ovp_enable_gpio, 1);
+			if (ret < 0) {
+				printk("%s: set direction of ovp_enable_gpio  fail!\n", __FUNCTION__);
+				return ret;
+			}
+		}
+		else
+		{
+			ret = gpio_direction_output(smb1360_dev->ovp_enable_gpio, 0);
+			if (ret < 0) {
+				printk("%s: set direction of ovp_enable_gpio  fail!\n", __FUNCTION__);
+				return ret;
+			}
+			smb1360_charging_toggle(FLAGS, true, true);
+		}
+
+		pr_info("set otg successfully ====> %d \n",toggle);
+	}
+	else
+	{
+		dev_err(smb1360_dev->dev, "%s++\n", __FUNCTION__);
+
+		if(toggle)
+		{
+			ret = smb1360_otg_regulator_enable(smb1360_dev->otg_vreg.rdev);
+			if (ret < 0)
+			{
+				printk("otg enable faill \n");
+				return ret;
+			}
+		}
+		else
+		{
+			ret = smb1360_otg_regulator_disable(smb1360_dev->otg_vreg.rdev);
+			if (ret < 0)
+			{
+				printk("otg disable faill \n");
+				return ret;
+			}
+		}
+
+		dev_err(smb1360_dev->dev, "%s--\n", __FUNCTION__);
+	}
+
+	return 0;
+}
+
+static void smb_config_max_current(int usb_state)
+{
+
+	BAT_DBG("%s: usb_state = %d\n", __FUNCTION__, usb_state);
+	/* USB Mode Detection (by SOC) */
+	if (usb_state == AC_IN||usb_state == SE1_IN) 
+	{
+		smb1360_dev->usb_psy_ma = ac_current;
+		smb1360_set_appropriate_usb_current(smb1360_dev);
+	} else if (usb_state == USB_IN) 
+	{
+		/*do nothing when USB_IN, using default setting 500mA*/
+		if(usbin_voltage_poor == true)
+			smb1360_dev->usb_psy_ma = 100;
+		else
+			smb1360_dev->usb_psy_ma = 500;
+			
+		smb1360_set_appropriate_usb_current(smb1360_dev);
+	} else if (usb_state == UNKNOWN_IN) 
+	{
+		/*do nothing when UNKNOWN_IN, using default setting 500mA*/
+		if(usbin_voltage_poor == true)
+			smb1360_dev->usb_psy_ma = 100;
+		else
+			smb1360_dev->usb_psy_ma = 500;
+		smb1360_set_appropriate_usb_current(smb1360_dev);
+	}
+	else if (usb_state == CABLE_OUT) 
+	{
+		/*set 100mA when cable out*/
+		smb1360_dev->usb_psy_ma = 100;
+		smb1360_set_appropriate_usb_current(smb1360_dev);
+	}
+
+}
+
+static void smb1360_config_max_current(int usb_state)
+{
+	int rc;
+	//if (!smb1360_is_charging(usb_state))
+	//	return;
+
+	if (!smb1360_dev) {
+		pr_err("%s: smb1360_dev is null due to driver probed isn't ready\n",
+			__FUNCTION__);
+
+		return;
+	}
+	rc = smb1360_enable_volatile_writes(smb1360_dev);
+	if (rc < 0) {
+		dev_err(smb1360_dev->dev, "Couldn't configure for volatile rc = %d\n",
+				rc);
+	}
+
+	//smb358_pre_config();
+	smb_config_max_current(usb_state);
+}
+
+int asus_set_Charger(int usb_state)
+{
+	int ret = 0;
+	struct power_supply *psy;
+
+	char usb_status_str[8][11] = {
+		"USB_IN",
+		"AC_IN",
+		"CABLE_OUT",
+		"ENABLE_5V",
+		"DISABLE_5V",
+		"PAD_SUPPLY",
+		"UNKNOWN_IN",
+		"SE1_IN",
+	};
+	//if( usb_state != CABLE_OUT )
+		g_usb_state = usb_state;
+	if (usb_state >= 0 && usb_state <= 7) {
+		BAT_DBG("%s:%s\n", __FUNCTION__, usb_status_str[usb_state]);
+	}
+	
+	/*BSP david: update power_supply after cable type changed*/
+	psy = get_psy_battery();
+	if (psy) {
+		power_supply_changed(psy);
+	} else{
+		pr_err("%s: fail to request power supply changed\n", __FUNCTION__);		
+	}
+	if (smb1360_dev) {
+		power_supply_changed(&smb1360_power_supplies[0]);
+		
+		//under 02h[7]=0,  prevent cable_plug & reboot when suspend adapter
+		//ret = Suspend_Adapter(0);
+		//if(ret){
+		//	pr_err("%s: Set adapter to normal mode fail!\n",
+		//		__FUNCTION__);
+		//}
+	}
+	switch (usb_state) {
+	case AC_IN:
+		if (smb1360_dev) {
+			mutex_lock(&g_usb_state_lock);
+			/*BSP david : do initial setting & config current*/
+			smb1360_config_max_current(g_usb_state);
+			mutex_unlock(&g_usb_state_lock);
+		}
+		break;
+	case USB_IN:
+		power_supply_set_online(smb1360_dev->usb_psy, 1);
+	case UNKNOWN_IN:
+	case SE1_IN:
+		/* BSP Clay: AC debounce policy */
+		if (smb1360_dev) {
+			mutex_lock(&g_usb_state_lock);
+			/*BSP david : do initial setting & config current*/
+			smb1360_config_max_current(usb_state);
+			mutex_unlock(&g_usb_state_lock);
+			/*BSP david : do JEITA*/
+			
+		}
+		break; 
+	case CABLE_OUT:
+		if (smb1360_dev) {
+			power_supply_set_online(smb1360_dev->usb_psy, 0);
+			mutex_lock(&g_usb_state_lock);
+			/*BSP david : do initial setting & config current*/
+			smb1360_config_max_current(g_usb_state);
+			mutex_unlock(&g_usb_state_lock);
+			pr_info("cable out !\n");
+
+		}
+		break;
+	case ENABLE_5V:
+		if (smb1360_dev) {
+			/* BSP Clay: AC debounce policy */
+			ret = set_otg(1);
+		}
+		break;
+	case DISABLE_5V:
+		if (smb1360_dev) {
+			/* BSP Clay: AC debounce policy */
+			ret = set_otg(0);
+		}
+		break;
+	default:
+		BAT_DBG(" %s: not support usb state = %d\n", __FUNCTION__, usb_state);
+		ret = 1;
+	}
+	return ret;
+}
+/*---BSP frank add asus_set_charger ---*/
+//asus bsp frank add smb1360_charging_toggle  and runin_switch +++
+int smb1360_charging_toggle(charging_toggle_level_t level, bool on, bool status_flag)
+{
+	int ret = 0;
+	static int old_toggle = true;
+	int result_toggle;
+	bool reject = false;
+	static charging_toggle_level_t old_lvl = JEITA;
+	char *level_str[] = {
+		"BALANCE",
+		"JEITA",
+		"FLAGS",
+	};
+
+	if (!smb1360_dev) {
+		pr_info("Warning: smb1360_dev is null "
+			"due to probe function has error\n");
+		return 1;
+	}
+
+
+	result_toggle = on;
+	
+	/* do charging or not? */
+	if (level != FLAGS) {
+		if (on) {
+			/* want to start charging? */
+			if (level == JEITA) {
+				if (!old_toggle) {
+					/* want to restart charging? */
+					if (old_lvl != JEITA) {
+						/* reject the request! someone stop charging before */
+						result_toggle = false;
+						reject = true;
+					}
+				}
+			} else if (level == BALANCE) {
+				if (!old_toggle) {
+					/* want to restart charging? */
+					if (old_lvl != BALANCE) {
+						/* reject the request! someone stop charging before */
+						result_toggle = false;
+						reject = true;
+					}
+				}
+			} else {
+				/* what the hell are you? */
+			}
+		} else {
+			/* want to stop charging? just do it! */
+		}
+	} else {
+		/* it's the highest level. just do it! */
+	}
+
+	BAT_DBG("%s: old_lvl:%s, request_lv:%s, old_toggle:%s, request_toggle:%s, result:%s, status_flag:%s\n",
+		__FUNCTION__,
+		level_str[old_lvl],
+		level_str[level],
+		old_toggle ? "ON" : "OFF",
+		on ? "ON" : "OFF",
+		result_toggle ? "ON" : "OFF",
+		status_flag ? "ON" : "OFF");
+
+	/* level value assignment */
+	if (!reject) {
+		old_lvl = level;
+	}
+
+	smb1360_charging_disable(smb1360_dev,USER,!result_toggle);
+
+
+
+	old_toggle = result_toggle;
+	if (status_flag) {
+		mutex_lock(&g_charging_toggle_lock);
+		g_charging_toggle_status = result_toggle;
+		mutex_unlock(&g_charging_toggle_lock);
+	}
+
+	return ret;
+}
+static int runin_switch_on;
+static int runin_switch_off;
+static ssize_t runin_switch_on_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+
+{
+	runin_switch_control_off = false;
+	smb1360_charging_toggle(FLAGS, true, true);
+   	return sprintf(buf, "%d\n", runin_switch_on);
+
+}
+static ssize_t runin_switch_off_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+
+{
+	runin_switch_control_off = true;
+	smb1360_charging_toggle(FLAGS, false, true);
+   	return sprintf(buf, "%d\n", runin_switch_off);
+
+}
+static ssize_t runin_switch_on_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
+
+{
+
+   	sscanf(buf, "%du", &runin_switch_on);
+
+  			 return count;
+
+}
+static ssize_t runin_switch_off_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
+
+{
+
+   	sscanf(buf, "%du", &runin_switch_off);
+
+  			 return count;
+
+}
+static struct kobj_attribute runin_switch_on_attribute = __ATTR(runin_switch_on, 0666, runin_switch_on_show, runin_switch_on_store);
+static struct kobj_attribute runin_switch_off_attribute = __ATTR(runin_switch_off, 0666, runin_switch_off_show, runin_switch_off_store);
+//asus bsp frank add smb1360_charging_toggle and runin_switch ---
+int is_usb_chg_plugged_in(void)
+{
+	int rc;
+	rc = smb1360_dev->usb_present;
+	return rc;
+}
+EXPORT_SYMBOL_GPL(is_usb_chg_plugged_in);
+
+int check_CSIR_function(void)
+{
+	u8 CSIR_first,CSIR_last;
+	int rc,CSIR_Version;
+	rc = smb1360_check_cycle_stretch(smb1360_dev);
+	if (rc)
+		pr_err("Unable to check cycle-stretch\n");
+
+	rc = smb1360_enable_fg_access(smb1360_dev);
+	if (rc) {
+		pr_err("Couldn't request FG access rc=%d\n", rc);
+	}
+	smb1360_dev->fg_access_type = FG_ACCESS_CFG;
+	rc = smb1360_select_fg_i2c_address(smb1360_dev);
+	if (rc) {
+		pr_err("Unable to set FG access I2C address\n");
+	}
+
+	//printk("++++ fg_i2c_addr = %X \n",smb1360_dev->fg_i2c_addr);	
+	rc = smb1360_fg_read(smb1360_dev, 0xD2, &CSIR_first);
+	
+	rc = smb1360_fg_read(smb1360_dev, 0xD3, &CSIR_last);
+ 
+	//printk("++++ CSIR version = %X%X\n",CSIR_first,CSIR_last);
+	
+	CSIR_Version = (CSIR_first<<8 ) + CSIR_last;
+	
+	printk("++++ CSIR version = %X \n",CSIR_Version);
+	
+	rc = smb1360_disable_fg_access(smb1360_dev);
+	if (rc) {
+		pr_err("Couldn't disable FG access rc=%d\n", rc);
+	}
+	return CSIR_Version;
+}
+#define	CSIR_Version_PROC_FILE	"CSIR_Version"
+static int CSIR_Version_proc_read(struct seq_file *buf, void *v)
+{
+	int ret = -1;
+	ret = check_CSIR_function();
+	seq_printf(buf, "%X\n", ret);
+	return 0;
+}
+static int CSIR_Version_proc_open(struct inode *inode, struct  file *file)
+{
+    return single_open(file, CSIR_Version_proc_read, NULL);
+}
+
+static const struct file_operations CSIR_Version_fops = {
+	.owner = THIS_MODULE,
+	.open = CSIR_Version_proc_open,
+	.read = seq_read,
+};
+static void create_CSIR_Version_proc_file(void)
+{
+	struct proc_dir_entry *CSIR_Version_proc_file = proc_create(CSIR_Version_PROC_FILE, 0666, NULL, &CSIR_Version_fops);
+
+	if (CSIR_Version_proc_file) {
+		printk("[BAT][CHG][SMB][Proc]CSIR_Version create ok!\n");
+	} else{
+		printk("[BAT][CHG][SMB][Proc]CSIR_Version create failed!\n");
+	}
+	return;
+}
+int64_t check_battery_id(void)
+{
+	struct qpnp_vadc_result result;
+	int rc=-1;
+	uint64_t batt_id_uv;
+	smb1360_dev->vadc_dev = qpnp_get_vadc(smb1360_dev->dev, "smb1360");
+	/* read battery ID */
+	rc = qpnp_vadc_read(smb1360_dev->vadc_dev, LR_MUX2_BAT_ID, &result);
+	if (rc) {
+		pr_err("error reading batt id channel = %d, rc = %d\n",
+					LR_MUX2_BAT_ID, rc);
+		return rc;
+	}
+	//denom = div64_s64(1800000 * 1000000LL, batt_id_uv) - 1000000LL;
+	//connectd_R = div64_s64(100 * 1000000LL + denom/2, denom);
+	batt_id_uv = result.physical;
+	pr_info("battery id ====> %llu \n",batt_id_uv);
+	return batt_id_uv;
+}
+#define	battery_id_PROC_FILE	"battery_id"
+static int battery_id_proc_read(struct seq_file *buf, void *v)
+{
+	int64_t ret = -1;
+	ret = check_battery_id();
+	seq_printf(buf, "%llu\n", ret);
+	return 0;
+}
+static int battery_id_proc_open(struct inode *inode, struct  file *file)
+{
+    return single_open(file, battery_id_proc_read, NULL);
+}
+
+static const struct file_operations battery_id_fops = {
+	.owner = THIS_MODULE,
+	.open = battery_id_proc_open,
+	.read = seq_read,
+};
+static void create_battery_id_proc_file(void)
+{
+	struct proc_dir_entry *battery_id_proc_file = proc_create(battery_id_PROC_FILE, 0666, NULL, &battery_id_fops);
+
+	if (battery_id_proc_file) {
+		printk("[BAT][CHG][SMB][Proc]battID_read create ok!\n");
+	} else{
+		printk("[BAT][CHG][SMB][Proc]battID_read create failed!\n");
+	}
+	return;
+}
+
+#define	ac_current_PROC_FILE	"driver/ac_current"
+static int ac_current_proc_read(struct seq_file *buf, void *v)
+{
+	int ret = -1;
+	ret = ac_current;
+	seq_printf(buf, "%d\n", ret);
+	return 0;
+}
+static int ac_current_proc_open(struct inode *inode, struct  file *file)
+{
+    return single_open(file, ac_current_proc_read, NULL);
+}
+static ssize_t ac_current_proc_write(struct file *filp, const char __user *buff,
+	size_t len, loff_t *data)
+{
+	int val;
+
+	char messages[256];
+
+	if (len > 256)
+	{
+		len = 256;
+	}
+
+	if (copy_from_user(messages, buff, len)) 
+	{
+		return -EFAULT;
+	}
+	
+	val = (int)simple_strtol(messages, NULL, 10);
+
+	ac_current = val;
+     
+	printk("[smb] set ac current ====> %d\n",val);
+
+	return len;
+}
+
+
+static const struct file_operations ac_current_fops = {
+	.owner = THIS_MODULE,
+	.open = ac_current_proc_open,
+	.write = ac_current_proc_write,
+	.read = seq_read,
+};
+static void create_ac_current_proc_file(void)
+{
+	struct proc_dir_entry *ac_current_proc_file = proc_create(ac_current_PROC_FILE, 0666, NULL, &ac_current_fops);
+
+	if (ac_current_proc_file) {
+		printk("[BAT][CHG][SMB][Proc]create_ac_current_proc_file create ok!\n");
+	} else{
+		printk("[BAT][CHG][SMB][Proc]create_ac_current_proc_file create failed!\n");
+	}
+	return;
+}
+
+//ASUS_BSP frank for ChargerDriver stress test +++
+#ifdef CONFIG_I2C_STRESS_TEST
+static int TestSmb1360ChargerReadWrite(struct i2c_client *client)
+{
+	int status;
+	u8 reg;
+	i2c_log_in_test_case("[BAT][CHG][SMB][Test]Test Smb1360Charger start\n");
+	 
+	status = smb1360_read(smb1360_dev, CFG_BATT_CHG_REG, &reg);
+	if (status < 0) {
+		i2c_log_in_test_case("[BAT][CHG][SMB][Test]Test Smb1360Charger end: status = %d\n", status);
+		return I2C_TEST_SMB1360_FAIL;
+	}
+	status = smb1360_masked_write(smb1360_dev, CMD_I2C_REG,
+		ALLOW_VOLATILE_BIT, ALLOW_VOLATILE_BIT);
+	if (status < 0) {
+		i2c_log_in_test_case("[BAT][CHG][SMB][Test]Test Smb1360Charger end: status = %d\n", status);
+		return I2C_TEST_SMB1360_FAIL;
+	}
+
+	i2c_log_in_test_case("[BAT][CHG][SMB][Test]Test Smb1360Charger end: data = %x\n", reg);
+	return I2C_TEST_PASS;
+};
+static struct i2c_test_case_info gChargerTestCaseInfo[] =
+{
+	__I2C_STRESS_TEST_CASE_ATTR(TestSmb1360ChargerReadWrite),
+};
+static void smb1360_i2c_stress_test(void)
+{
+	BAT_DBG("%s\n", __FUNCTION__);
+	i2c_add_test_case(smb1360_dev->client, "Smb1360Charger", ARRAY_AND_SIZE(gChargerTestCaseInfo));
+}
+#endif
+//ASUS_BSP frank for ChargerDriver stress test ---
+static void check_default_boost_gpio(struct smb1360_chip *chip, const char *default_name, 
+									const char *gpio_name, int *gpio_num, int enable)
+{
+	int ret;
+ 	struct pinctrl *key_pinctrl;
+ 	struct pinctrl_state *set_state;
+
+	if(!chip || !default_name || !gpio_name)
+		pr_err("chip default_name or gpio_name is null!\n");
+
+	key_pinctrl = devm_pinctrl_get(chip->dev);
+
+	set_state = pinctrl_lookup_state(key_pinctrl, default_name);
+
+	if (IS_ERR(set_state))
+	{
+		pr_err("cannot get phy pinctrl %s\n", default_name);
+	}
+	else
+	{
+		ret = pinctrl_select_state(key_pinctrl, set_state);
+		printk("%s: %s pinctrl_select_state = %d\n", __FUNCTION__, default_name, ret);
+	}
+
+	*gpio_num = of_get_named_gpio(chip->dev->of_node, gpio_name, 0);
+	if(*gpio_num < 0)
+		printk("otg enable gpio is not available !\n");
+
+	if ((!gpio_is_valid(*gpio_num))) {
+		printk("%s: otg_enable_gpio is not valid!\n", __FUNCTION__);
+	}
+	ret = gpio_request(*gpio_num, gpio_name);
+	if (ret < 0) {
+		printk("%s: request otg_enable_gpio  fail!\n", __FUNCTION__);
+	}
+
+	ret = gpio_direction_output(*gpio_num, enable);
+	if (ret < 0) {
+		printk("%s: set direction of otg_enable_gpio  fail!\n", __FUNCTION__);
+	}
+
+	printk("%s ====> %d \n", gpio_name, gpio_get_value(*gpio_num));
+	
+}
+
+
+void check_otg_ovp_gpio_value(struct smb1360_chip *chip)
+{
+
+	// 1. set otg enable gpio
+	if(chip->HW_ID == ZC550KL_8939_ER)
+		check_default_boost_gpio(chip, "otg_enable_default", "otg_enable_gpio", &chip->otg_enable_gpio, 1);
+	else if(chip->HW_ID == ZC550KL_8939_PR)	
+		check_default_boost_gpio(chip, "boost_enable_default", "boost_enable_gpio", &chip->boost_enable_gpio, 0);
+ 
+ 	// 2. set ovp enable gpio
+	check_default_boost_gpio(chip, "ovp_enable_default", "ovp_enable_gpio", &chip->ovp_enable_gpio, 0);
+
+#if 0
+	int ret;
+	struct pinctrl *key_pinctrl;
+	struct pinctrl_state *set_state;
+
+	// 1. set otg enable gpio
+	key_pinctrl = devm_pinctrl_get(chip->dev);
+
+	set_state = pinctrl_lookup_state(key_pinctrl, "otg_enable_default");
+
+	if (IS_ERR(set_state))
+	{
+		pr_err("cannot get phy pinctrl otg_enable_default\n");
+	}
+	else
+	{
+		ret = pinctrl_select_state(key_pinctrl, set_state);
+		printk("%s: otg_enable_default pinctrl_select_state = %d\n", __FUNCTION__, ret);
+	}
+
+	chip->otg_enable_gpio = of_get_named_gpio(chip->dev->of_node, "otg_enable_gpio", 0);
+	if(chip->otg_enable_gpio < 0)
+		printk("otg enable gpio is not available !\n");
+
+	if ((!gpio_is_valid(chip->otg_enable_gpio))) {
+		printk("%s: otg_enable_gpio is not valid!\n", __FUNCTION__);
+	}
+	ret = gpio_request(chip->otg_enable_gpio,"otg_enable_gpio");
+	if (ret < 0) {
+		printk("%s: request otg_enable_gpio  fail!\n", __FUNCTION__);
+	}
+
+	ret = gpio_direction_output(chip->otg_enable_gpio, 1);
+	if (ret < 0) {
+		printk("%s: set direction of otg_enable_gpio  fail!\n", __FUNCTION__);
+	}
+
+	printk("otg_enable_gpio ====> %d \n",gpio_get_value(chip->otg_enable_gpio));
+
+	// 2. set ovp enable gpio
+	set_state = pinctrl_lookup_state(key_pinctrl, "ovp_enable_default");
+	if (IS_ERR(set_state))
+	{
+		pr_err("cannot get phy pinctrl ovp_enable_default\n");
+	}
+	else
+	{
+		ret = pinctrl_select_state(key_pinctrl, set_state);
+		printk("%s: ovp_enable_default pinctrl_select_state = %d\n", __FUNCTION__, ret);
+	}
+
+	chip->ovp_enable_gpio = of_get_named_gpio(chip->dev->of_node, "ovp_enable_gpio", 0);
+	if(chip->otg_enable_gpio < 0)
+		printk("ovp enable gpio is not available !\n");
+
+	if ((!gpio_is_valid(chip->ovp_enable_gpio))) {
+		printk("%s: ovp_enable_gpio is not valid!\n", __FUNCTION__);
+	}
+	ret = gpio_request(chip->ovp_enable_gpio,"ovp_enable_gpio");
+	if (ret < 0) {
+		printk("%s: request ovp_enable_gpio  fail!\n", __FUNCTION__);
+	}
+
+	ret = gpio_direction_output(chip->ovp_enable_gpio, 0);
+	if (ret < 0) {
+		printk("%s: set direction of ovp_enable_gpio  fail!\n", __FUNCTION__);
+	}
+
+	printk("ovp_enable_gpio ====> %d \n",gpio_get_value(chip->ovp_enable_gpio));
+#endif
+
+}
+#if defined(ASUS_ZC550KL8939_PROJECT)
+
+int AICL_enable(bool value)
+{
+	int rc;
+	if(value == true)
+	{
+		rc = smb1360_masked_write(smb1360_dev, CFG_GLITCH_FLT_REG, BIT(0), BIT(0));
+		if (rc < 0) {
+			dev_err(smb1360_dev->dev, "Couldn't enable AICL rc=%d\n",
+				rc);
+			return rc;
+		}
+	}
+	else
+	{
+		rc = smb1360_masked_write(smb1360_dev, CFG_GLITCH_FLT_REG, BIT(0), 0);
+		if (rc < 0) {
+			dev_err(smb1360_dev->dev, "Couldn't disable AICL rc=%d\n",
+				rc);
+			return rc;
+		}
+	}
+	return 0;
+}
+
+int Sysfs_read_file(char *filename, char *buf, size_t size)
+{
+	struct file *fp = NULL;
+	mm_segment_t old_fs;
+	loff_t pos_lsts = 0;
+	
+	//int cal_val = 0;
+	int readlen = 0;
+
+	strcpy(buf,"0");
+
+	/* open file */
+	fp = filp_open(filename, O_RDONLY, S_IRWXU | S_IRWXG | S_IRWXO);
+	if (IS_ERR_OR_NULL(fp)) {
+		pr_info(" File open (%s) fail\n", filename);
+		return -1;
+	}
+
+	/*For purpose that can use read/write system call*/
+
+	/* Save addr_limit of the current process */
+	old_fs = get_fs();
+	/* Set addr_limit of the current process to that of kernel */
+	set_fs(KERNEL_DS);
+
+	if (fp->f_op != NULL && fp->f_op->read != NULL) {
+		pos_lsts = 0;
+		readlen = fp->f_op->read(fp, buf, size, &pos_lsts);
+		buf[readlen] = '\0';
+	} else {
+		pr_info(" File (%s) strlen f_op=NULL or op->read=NULL\n", filename);
+		return -2;
+	}
+	/* Set addr_limit of the current process back to its own */
+	set_fs(old_fs);
+
+	/* close file */
+	filp_close(fp, NULL);
+
+	//sscanf(country_code_buf, "%s", &cal_val);
+
+	pr_info("buf ====> %s \n",buf);
+
+	return 0;
+}
+
+void asus_adaptor_10W_check_work(int time)
+{
+	wake_lock(&adaptor_10W_check_wake_lock);
+	schedule_delayed_work(&adaptor_10W_check_work, time * HZ);
+}
+int adaptor_10W_check_count;
+void adaptor_10W_check(struct work_struct *dat)
+{
+	char read_buf[8];
+	if(Sysfs_read_file(COUNTRY_CODE_FACTORY_FILE,read_buf,2) == 0)
+	{
+		if(strcmp(read_buf,"IN") == 0)
+		{
+			if(Sysfs_read_file(ADAPTOR_10W_FACTORY_FILE,read_buf,2) < 0)
+			{
+				pr_info("ADAPTOR_10W_FACTORY_FILE not exsit, set 5W ! \n");
+				//AICL_enable(false);
+				//mdelay(100);
+				//AICL_enable(true);
+			}
+			else
+			{
+				pr_info("ADAPTOR_10W_FACTORY_FILE exsit, set 10W ! \n");
+				smb1360_dev->parallel_charging = true;
+				AICL_enable(false);
+				mdelay(100);
+				AICL_enable(true);
+			}
+		}
+		else
+		{
+			pr_info("other country, not India ! set 10W setting \n");
+			smb1360_dev->parallel_charging = true;
+			AICL_enable(false);
+			mdelay(100);
+			AICL_enable(true);
+		}
+		wake_unlock(&adaptor_10W_check_wake_lock);
+	}
+	else
+	{
+		pr_info("can not read country code \n");
+		adaptor_10W_check_count++;
+
+		if(adaptor_10W_check_count < 20)
+		{
+			schedule_delayed_work(&adaptor_10W_check_work, 2 * HZ);
+		}
+		else
+		{
+			pr_info("adaptor_10W_check_count >= 20\n");
+			wake_unlock(&adaptor_10W_check_wake_lock);
+		}	
+	}
+}
+#endif
 static int smb1360_probe(struct i2c_client *client,
 				const struct i2c_device_id *id)
 {
@@ -4889,10 +6502,11 @@ static int smb1360_probe(struct i2c_client *client,
 	int rc;
 	struct smb1360_chip *chip;
 	struct power_supply *usb_psy;
-
+	pr_info("start ! \n");
 	usb_psy = power_supply_get_by_name("usb");
 	if (!usb_psy) {
-		dev_dbg(&client->dev, "USB supply not found; defer probe\n");
+		//dev_dbg(&client->dev, "USB supply not found; defer probe\n");
+		pr_info( "USB supply not found; defer probe\n");
 		return -EPROBE_DEFER;
 	}
 
@@ -4907,6 +6521,13 @@ static int smb1360_probe(struct i2c_client *client,
 	chip->dev = &client->dev;
 	chip->usb_psy = usb_psy;
 	chip->fake_battery_soc = -EINVAL;
+
+	/*+++BSP frank AC power supply+++*/
+	rc = smb1360_register_power_supply(&client->dev);
+	if (rc < 0)
+		return rc;
+	/*---BSP frank AC power supply---*/
+	
 	mutex_init(&chip->read_write_lock);
 	mutex_init(&chip->parallel_chg_lock);
 	mutex_init(&chip->otp_gain_lock);
@@ -4916,6 +6537,18 @@ static int smb1360_probe(struct i2c_client *client,
 			smb1360_delayed_init_work_fn);
 	init_completion(&chip->fg_mem_access_granted);
 	smb1360_wakeup_src_init(chip);
+
+//asus report capacity frank ++++
+	smb1360_dev = chip;
+	wake_lock_init(&bat_alarm_wake_lock, WAKE_LOCK_SUSPEND, "bat_alarm_wake");
+	alarm_init(&bat_alarm, ALARM_REALTIME, batAlarm_handler);
+	INIT_DELAYED_WORK(&SetBatRTCWorker, BatTriggeredSetRTC);
+	INIT_DELAYED_WORK(&battery_poll_data_work, asus_polling_data);
+//asus report capacity frank ----
+
+#if defined(ASUS_ZC550KL8939_PROJECT)
+	INIT_DELAYED_WORK(&adaptor_10W_check_work, adaptor_10W_check);
+#endif
 
 	/* probe the device to check if its actually connected */
 	rc = smb1360_read(chip, CFG_BATT_CHG_REG, &reg);
@@ -4928,12 +6561,24 @@ static int smb1360_probe(struct i2c_client *client,
 	if (rc)
 		dev_err(chip->dev, "Couldn't read revision rc = %d\n", rc);
 
+
+	if( check_battery_id() < 700000 && check_battery_id()>500000)
+	{
+		chip->vfloat_mv = 4380;
+		battery_type = Battery_438V;
+	}
+	else
+	{
+		chip->vfloat_mv = 4350;
+		battery_type = Battery_435V;
+	}
+	pr_info("battery type ====> %d \n",battery_type);
+	
 	rc = smb_parse_dt(chip);
 	if (rc < 0) {
 		dev_err(&client->dev, "Unable to parse DT nodes\n");
 		return rc;
 	}
-
 	device_init_wakeup(chip->dev, 1);
 	i2c_set_clientdata(client, chip);
 	mutex_init(&chip->irq_complete);
@@ -4947,6 +6592,10 @@ static int smb1360_probe(struct i2c_client *client,
 
 	pr_debug("default_i2c_addr=%x\n", chip->default_i2c_addr);
 	smb1360_otp_backup_pool_init(chip);
+
+	if(chip->HW_ID == ZC550KL_8939_ER || chip->HW_ID == ZC550KL_8939_PR)
+		check_otg_ovp_gpio_value(chip);
+
 	rc = smb1360_hw_init(chip);
 	if (rc < 0) {
 		dev_err(&client->dev,
@@ -5121,18 +6770,72 @@ static int smb1360_probe(struct i2c_client *client,
 			chip->usb_present,
 			smb1360_get_prop_batt_capacity(chip));
 
+	//asus report capacity frank ++++
+	asus_polling_battery_data_work(0);
+	//asus report capacity frank ----
+
+#if defined(ASUS_ZC550KL8939_PROJECT)
+	wake_lock_init(&adaptor_10W_check_wake_lock, WAKE_LOCK_SUSPEND, "adaptor_10W_check");
+	adaptor_10W_check_count = 0;
+	asus_adaptor_10W_check_work(1);
+#endif
+
+	//asus bsp frank add smb1360_charging_toggle and runin_switch +++
+	{
+		int retval;
+
+   	
+   		retval = sysfs_create_file(&chip->dev->kobj, &runin_switch_on_attribute.attr);
+
+   		if (retval)
+
+      			kobject_put(&chip->dev->kobj);
+		
+		retval = sysfs_create_file(&chip->dev->kobj, &runin_switch_off_attribute.attr);
+
+   		if (retval)
+
+      			kobject_put(&chip->dev->kobj);
+
+	}
+	//asus bsp frank add smb1360_charging_toggle and runin_switch ---
+	create_CSIR_Version_proc_file();
+	create_battery_id_proc_file();
+
+	create_ac_current_proc_file();
+
+//ASUS_BSP frank for ChargerDriver stress test +++
+#ifdef CONFIG_I2C_STRESS_TEST
+      smb1360_i2c_stress_test();
+#endif
+//ASUS_BSP frank for ChargerDriver stress test ---
+	wake_lock_init(&usbin_wake_lock, WAKE_LOCK_SUSPEND, "usbin_wake");
+	
+	smb1360_probe_success = true;
+
 	return 0;
 
 unregister_batt_psy:
 	power_supply_unregister(&chip->batt_psy);
 fail_hw_init:
 	regulator_unregister(chip->otg_vreg.rdev);
+	power_supply_unregister(&smb1360_power_supplies[0]);
 	return rc;
 }
 
 static int smb1360_remove(struct i2c_client *client)
 {
 	struct smb1360_chip *chip = i2c_get_clientdata(client);
+
+	if (gpio_is_valid(chip->otg_enable_gpio))
+		gpio_free(chip->otg_enable_gpio);
+
+	if (gpio_is_valid(chip->ovp_enable_gpio))
+		gpio_free(chip->ovp_enable_gpio);
+
+	if (gpio_is_valid(chip->boost_enable_gpio))
+		gpio_free(chip->boost_enable_gpio);
+
 	regulator_unregister(chip->otg_vreg.rdev);
 	power_supply_unregister(&chip->batt_psy);
 	mutex_destroy(&chip->charging_disable_lock);
@@ -5142,7 +6845,10 @@ static int smb1360_remove(struct i2c_client *client)
 	mutex_destroy(&chip->otp_gain_lock);
 	mutex_destroy(&chip->fg_access_request_lock);
 	debugfs_remove_recursive(chip->debug_root);
-
+	wake_lock_destroy(&usbin_wake_lock);
+#if defined(ASUS_ZC550KL8939_PROJECT)
+	wake_lock_destroy(&adaptor_10W_check_wake_lock);
+#endif
 	return 0;
 }
 
@@ -5204,6 +6910,12 @@ static int smb1360_resume(struct device *dev)
 	int i, rc;
 	struct i2c_client *client = to_i2c_client(dev);
 	struct smb1360_chip *chip = i2c_get_clientdata(client);
+	//asus report capacity frank ++++
+	struct timespec mtNow;
+	//asus report capacity frank ----
+
+	//int usb_state = g_usb_state;
+	BAT_DBG("%s\n", __FUNCTION__);
 
 	/* Restore the IRQ config */
 	for (i = 0; i < 3; i++) {
@@ -5215,6 +6927,15 @@ static int smb1360_resume(struct device *dev)
 
 	mutex_lock(&chip->irq_complete);
 	chip->resume_completed = true;
+
+	//asus report capacity frank ++++
+	mtNow = current_kernel_time();
+	/*BSP david: if not update for more than 180s, do report capacity*/
+	if (mtNow.tv_sec - g_last_print_time.tv_sec >= REPORT_CAPACITY_POLLING_TIME) {
+		asus_polling_battery_data_work(0);
+	}
+	//asus report capacity frank ----
+
 	if (chip->irq_waiting) {
 		chip->irq_disabled = false;
 		enable_irq(client->irq);
@@ -5275,9 +6996,19 @@ static struct i2c_driver smb1360_driver = {
 	.shutdown	= smb1360_shutdown,
 	.id_table	= smb1360_id,
 };
-
-module_i2c_driver(smb1360_driver);
-
+int __init
+smb1360_driver_init(void)
+{
+	return i2c_add_driver(&smb1360_driver);
+}
+late_initcall(smb1360_driver_init);
+//module_i2c_driver(smb1360_driver);
+static void __exit
+smb1360_driver_exit(void)
+{
+	i2c_del_driver(&smb1360_driver);
+}
+module_exit(smb1360_driver_exit);
 MODULE_DESCRIPTION("SMB1360 Charger and Fuel Gauge");
 MODULE_LICENSE("GPL v2");
 MODULE_ALIAS("i2c:smb1360-chg-fg");

@@ -862,11 +862,16 @@ static void update_cpu_topology(struct device *dev)
 	core_ptr->sync_cluster = false;
 
 	sync_cluster_id = get_sync_cluster(dev, &sync_cluster_cnt);
+	//+++ SZ_BSP gauss_li "fix can't create  /sys/module/msm_thermal/cluster_info node"
+	#ifdef ASUS_ZC550KL_PROJECT
+	#else
 	if (!sync_cluster_id) {
 		devm_kfree(dev, core_ptr);
 		core_ptr = NULL;
 		return;
 	}
+	#endif
+	//--- SZ_BSP gauss_li "fix can't create  /sys/module/msm_thermal/cluster_info node"
 	temp_ptr = devm_kzalloc(dev, sizeof(struct cluster_info) * cluster_cnt,
 					GFP_KERNEL);
 	if (!temp_ptr) {

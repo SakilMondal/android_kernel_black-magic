@@ -31,6 +31,15 @@
 
 #define XO_CLK_RATE	19200000
 
+//ASUS_BSP: Louis ++
+#define PANEL_SLEEP_MODE_ENABLE 1
+
+#if PANEL_SLEEP_MODE_ENABLE
+static bool first_panel_power_on = true;
+#endif
+struct mdss_panel_data *g_mdss_pdata;
+//ASUS_BSP: Louis --
+
 static int mdss_dsi_pinctrl_set_state(struct mdss_dsi_ctrl_pdata *ctrl_pdata,
 					bool active);
 
@@ -74,7 +83,11 @@ static int mdss_dsi_panel_power_off(struct mdss_panel_data *pdata)
 {
 	int ret = 0;
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+//ASUS_BSP: Louis ++
+#if !PANEL_SLEEP_MODE_ENABLE
 	int i = 0;
+#endif
+//ASUS_BSP: Louis --
 
 	if (pdata == NULL) {
 		pr_err("%s: Invalid input data\n", __func__);
@@ -82,14 +95,20 @@ static int mdss_dsi_panel_power_off(struct mdss_panel_data *pdata)
 		goto end;
 	}
 
+	printk("[Display] %s: ++\n", __func__);	//ASUS_BSP: Louis ++
+
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
 
+//ASUS_BSP: Louis ++
+#if !PANEL_SLEEP_MODE_ENABLE
 	ret = mdss_dsi_panel_reset(pdata, 0);
 	if (ret) {
 		pr_warn("%s: Panel reset failed. rc=%d\n", __func__, ret);
 		ret = 0;
 	}
+#endif
+//ASUS_BSP: Louis --
 
 	if (mdss_dsi_pinctrl_set_state(ctrl_pdata, false))
 		pr_debug("reset disable: pinctrl not enabled\n");
@@ -103,6 +122,8 @@ static int mdss_dsi_panel_power_off(struct mdss_panel_data *pdata)
 		udelay(2000);
 	}
 
+//ASUS_BSP: Louis ++
+#if !PANEL_SLEEP_MODE_ENABLE
 	for (i = DSI_MAX_PM - 1; i >= 0; i--) {
 		/*
 		 * Core power module will be disabled when the
@@ -117,6 +138,9 @@ static int mdss_dsi_panel_power_off(struct mdss_panel_data *pdata)
 			pr_err("%s: failed to disable vregs for %s\n",
 				__func__, __mdss_dsi_pm_name(i));
 	}
+#endif
+	printk("[Display] %s: --\n", __func__);
+//ASUS_BSP: Louis --
 
 end:
 	return ret;
@@ -133,25 +157,37 @@ static int mdss_dsi_panel_power_on(struct mdss_panel_data *pdata)
 		return -EINVAL;
 	}
 
+	printk("[Display] %s: ++\n", __func__);	//ASUS_BSP: Louis ++
+
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
 
-	for (i = 0; i < DSI_MAX_PM; i++) {
-		/*
-		 * Core power module will be enabled when the
-		 * clocks are enabled
-		 */
-		if (DSI_CORE_PM == i)
-			continue;
-		ret = msm_dss_enable_vreg(
-			ctrl_pdata->power_data[i].vreg_config,
-			ctrl_pdata->power_data[i].num_vreg, 1);
-		if (ret) {
-			pr_err("%s: failed to enable vregs for %s\n",
-				__func__, __mdss_dsi_pm_name(i));
-			goto error;
+//ASUS_BSP: Louis ++
+#if PANEL_SLEEP_MODE_ENABLE
+    if (first_panel_power_on) {
+#endif
+//ASUS_BSP: Louis --
+		for (i = 0; i < DSI_MAX_PM; i++) {
+			/*
+			* Core power module will be enabled when the
+			* clocks are enabled
+			*/
+			if (DSI_CORE_PM == i)
+				continue;
+			ret = msm_dss_enable_vreg(
+				ctrl_pdata->power_data[i].vreg_config,
+				ctrl_pdata->power_data[i].num_vreg, 1);
+			if (ret) {
+				pr_err("%s: failed to enable vregs for %s\n",
+					__func__, __mdss_dsi_pm_name(i));
+				goto error;
+			}
 		}
+//ASUS_BSP: Louis ++
+#if PANEL_SLEEP_MODE_ENABLE
 	}
+#endif
+//ASUS_BSP: Louis --
 	if (ctrl_pdata->panel_bias_vreg) {
 		pr_debug("%s: Enable panel bias vreg. ndx = %d\n",
 		       __func__, ctrl_pdata->ndx);
@@ -174,10 +210,20 @@ static int mdss_dsi_panel_power_on(struct mdss_panel_data *pdata)
 		if (mdss_dsi_pinctrl_set_state(ctrl_pdata, true))
 			pr_debug("reset enable: pinctrl not enabled\n");
 
+//ASUS_BSP: Louis ++
+#if PANEL_SLEEP_MODE_ENABLE
+	if (first_panel_power_on) {
+#endif
+//ASUS_BSP: Louis --
 		ret = mdss_dsi_panel_reset(pdata, 1);
 		if (ret)
 			pr_err("%s: Panel reset failed. rc=%d\n",
 					__func__, ret);
+//ASUS_BSP: Louis ++
+#if PANEL_SLEEP_MODE_ENABLE
+	}
+#endif
+//ASUS_BSP: Louis --
 	}
 
 error:
@@ -187,6 +233,14 @@ error:
 				ctrl_pdata->power_data[i].vreg_config,
 				ctrl_pdata->power_data[i].num_vreg, 0);
 	}
+
+//ASUS_BSP: Louis ++
+#if PANEL_SLEEP_MODE_ENABLE
+    first_panel_power_on = false;
+#endif
+	printk("[Display] %s: --\n", __func__);
+//ASUS_BSP: Louis --
+
 	return ret;
 }
 
@@ -471,7 +525,7 @@ static int mdss_dsi_off(struct mdss_panel_data *pdata, int power_state)
 
 	panel_info = &ctrl_pdata->panel_data.panel_info;
 
-	pr_debug("%s+: ctrl=%p ndx=%d power_state=%d\n",
+	pr_debug("%s+: ctrl=%pK ndx=%d power_state=%d\n",
 		__func__, ctrl_pdata, ctrl_pdata->ndx, power_state);
 
 	if (power_state == panel_info->panel_power_state) {
@@ -559,7 +613,7 @@ int mdss_dsi_on(struct mdss_panel_data *pdata)
 				panel_data);
 
 	cur_power_state = pdata->panel_info.panel_power_state;
-	pr_debug("%s+: ctrl=%p ndx=%d cur_power_state=%d\n", __func__,
+	pr_debug("%s+: ctrl=%pK ndx=%d cur_power_state=%d\n", __func__,
 		ctrl_pdata, ctrl_pdata->ndx, cur_power_state);
 
 	pinfo = &pdata->panel_info;
@@ -703,7 +757,7 @@ static int mdss_dsi_unblank(struct mdss_panel_data *pdata)
 				panel_data);
 	mipi  = &pdata->panel_info.mipi;
 
-	pr_debug("%s+: ctrl=%p ndx=%d cur_blank_state=%d\n", __func__,
+	pr_debug("%s+: ctrl=%pK ndx=%d cur_blank_state=%d\n", __func__,
 		ctrl_pdata, ctrl_pdata->ndx, pdata->panel_info.blank_state);
 
 	mdss_dsi_clk_ctrl(ctrl_pdata, DSI_ALL_CLKS, 1);
@@ -756,7 +810,7 @@ static int mdss_dsi_blank(struct mdss_panel_data *pdata, int power_state)
 				panel_data);
 	mipi = &pdata->panel_info.mipi;
 
-	pr_debug("%s+: ctrl=%p ndx=%d power_state=%d\n",
+	pr_debug("%s+: ctrl=%pK ndx=%d power_state=%d\n",
 		__func__, ctrl_pdata, ctrl_pdata->ndx, power_state);
 
 	mdss_dsi_clk_ctrl(ctrl_pdata, DSI_ALL_CLKS, 1);
@@ -826,7 +880,7 @@ static int mdss_dsi_post_panel_on(struct mdss_panel_data *pdata)
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
 
-	pr_debug("%s+: ctrl=%p ndx=%d\n", __func__,
+	pr_debug("%s+: ctrl=%pK ndx=%d\n", __func__,
 				ctrl_pdata, ctrl_pdata->ndx);
 
 	mdss_dsi_clk_ctrl(ctrl_pdata, DSI_ALL_CLKS, 1);
@@ -858,7 +912,7 @@ int mdss_dsi_cont_splash_on(struct mdss_panel_data *pdata)
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
 
-	pr_debug("%s+: ctrl=%p ndx=%d\n", __func__,
+	pr_debug("%s+: ctrl=%pK ndx=%d\n", __func__,
 				ctrl_pdata, ctrl_pdata->ndx);
 
 	WARN((ctrl_pdata->ctrl_state & CTRL_STATE_PANEL_INIT),
@@ -1696,9 +1750,9 @@ int mdss_dsi_retrieve_ctrl_resources(struct platform_device *pdev, int mode,
 		return rc;
 	}
 
-	pr_info("%s: ctrl_base=%p ctrl_size=%x phy_base=%p phy_size=%x\n",
+	printk("[Display ]%s: ctrl_base=%pK ctrl_size=%x phy_base=%p phy_size=%x\n",
 		__func__, ctrl->ctrl_base, ctrl->reg_size, ctrl->phy_io.base,
-		ctrl->phy_io.len);
+		ctrl->phy_io.len);	//ASUS_BSP: Louis +++
 
 	rc = msm_dss_ioremap_byname(pdev, &ctrl->mmss_misc_io,
 		"mmss_misc_phys");
@@ -2015,6 +2069,8 @@ int dsi_panel_device_register(struct device_node *pan_node,
 
 	panel_debug_register_base("panel",
 		ctrl_pdata->ctrl_base, ctrl_pdata->reg_size);
+	
+	g_mdss_pdata = &(ctrl_pdata->panel_data);//ASUS_BSP: Louis +++
 
 	pr_debug("%s: Panel data initialized\n", __func__);
 	return 0;

@@ -436,6 +436,8 @@ struct mmc_host {
 	} perf;
 	bool perf_enable;
 #endif
+       unsigned int cd_delay;  //ASUS_BSP +++ Allen_Zhuang "card detect config"
+       unsigned int sd_status; //ASUS_BSP +++ Allen_Zhuang "sd status for ATD"
 	struct {
 		unsigned long	busy_time_us;
 		unsigned long	window_time;

@@ -169,3 +169,38 @@ obj-$(CONFIG_ESOC)		+= esoc/
 obj-$(CONFIG_BIF)		+= bif/
 obj-$(CONFIG_SENSORS)		+= sensors/
 obj-$(CONFIG_SENSORS_SSC)	+= sensors/
+
+#Texura
+ifdef CONFIG_TEXURA_ARM64
+	ifeq ($(ASUS_BUILD_PROJECT), ZC550KL)
+		ifeq ($(IS_BOARD_PLATFORM), 8939)
+			ifdef CONFIG_TEXURA_USERDEBUG
+			obj-y				+= exfat/ZC550KL/8939/userdebug/64/objects/
+			else
+			obj-y				+= exfat/ZC550KL/8939/user/64/objects/
+			endif
+		else
+			ifdef CONFIG_TEXURA_USERDEBUG
+			obj-y				+= exfat/ZC550KL/8916/userdebug/64/objects/
+			else
+			obj-y				+= exfat/ZC550KL/8916/user/64/objects/
+			endif
+		endif
+	else
+		ifdef CONFIG_TEXURA_USERDEBUG
+		obj-y				+= ntfs/userdebug/64/objects/
+		obj-y				+= exfat/userdebug/64/objects/
+		else
+		obj-y				+= ntfs/user/64/objects/
+		obj-y				+= exfat/user/64/objects/
+		endif
+	endif
+else
+	ifdef CONFIG_TEXURA_USERDEBUG
+#	obj-y				+= ntfs/userdebug/32/objects/
+#	obj-y				+= exfat/userdebug/32/objects/
+	else
+#	obj-y				+= ntfs/user/32/objects/
+#	obj-y				+= exfat/user/32/objects/
+	endif
+endif

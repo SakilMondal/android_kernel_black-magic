@@ -118,6 +118,7 @@ static inline int con_debug_leave(void)
 #define CON_BOOT	(8)
 #define CON_ANYTIME	(16) /* Safe to call when cpu is offline */
 #define CON_BRL		(32) /* Used for a braille device */
+#define CON_IGNORELEVEL	(64) /* Used to ignore log level for a console */
 
 struct console {
 	char	name[16];
@@ -194,5 +195,9 @@ void vcs_remove_sysfs(int index);
 #ifdef CONFIG_VGA_CONSOLE
 extern bool vgacon_text_force(void);
 #endif
-
+//ASUS_BSP +++ [Power] jeff_gu Add for wakeup debug
+extern int gpio_irq_cnt, gpio_resume_irq[8], gic_irq_cnt, gic_resume_irq[8];
+extern unsigned int pm_pwrcs_ret;
+extern unsigned int pwrcs_time;
+//ASUS_BSP --- [Power] jeff_gu Add for wakeup debug
 #endif /* _LINUX_CONSOLE_H */

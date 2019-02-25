@@ -69,7 +69,23 @@ struct logger_entry {
 	kuid_t		euid;
 	char		msg[0];
 };
-
+struct logger_plugin {
+	struct list_head list;
+	void (*init) (void * /* callback data */);
+	void (*exit) (void * /* callback data */);
+	void (*write) (unsigned char * /* msg to write */,
+		       unsigned int /* length */,
+		       bool /* from user ? */,
+		       void * /* callback data */);
+	void (*write_seg) (void * /* msg segment to write */,
+			   unsigned int /* length */,
+			   bool /* from user ? */,
+			   bool /* start of msg ? */,
+			   bool /* end of msg ? */,
+			   void * /* callback data*/);
+	void (*write_seg_recover) (void * /* callback data */);
+	void *data;
+};
 #define LOGGER_LOG_RADIO	"log_radio"	/* radio-related messages */
 #define LOGGER_LOG_EVENTS	"log_events"	/* system/hardware events */
 #define LOGGER_LOG_SYSTEM	"log_system"	/* system/framework messages */

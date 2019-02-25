@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -388,7 +388,11 @@ err_put:
 	return ret;
 }
 EXPORT_SYMBOL(kgsl_snapshot_get_object);
-
+//ASUSBSP: breeze, forece pet watchdog to avoid wdt+++
+#ifdef ASUS_ZC550KL_PROJECT
+extern void asus_pet_watchdog(void);
+#endif
+//ASUSBSP: breeze, forece pet watchdog to avoid wdt---
 /**
  * kgsl_snapshot_dump_regs - helper function to dump device registers
  * @device - the device to dump registers from
@@ -479,6 +483,11 @@ size_t kgsl_snapshot_dump_regs(struct kgsl_device *device, u8 *buf,
 				*data++ = k;
 				*data++ = val;
 			}
+			//ASUSBSP: breeze, forece pet watchdog to avoid wdt+++
+#ifdef ASUS_ZC550KL_PROJECT
+			asus_pet_watchdog();
+#endif
+			//ASUSBSP: breeze, forece pet watchdog to avoid wdt---
 		}
 	}
 
@@ -1110,9 +1119,6 @@ void kgsl_snapshot_save_frozen_objs(struct work_struct *work)
 		goto done;
 
 	snapshot->mempool = vmalloc(size);
-	if (snapshot->mempool != NULL)
-		KGSL_CORE_ERR("snapshot: mempool address %p, size %zx\n",
-				snapshot->mempool, size);
 
 	ptr = snapshot->mempool;
 	snapshot->mempool_size = 0;

@@ -317,6 +317,7 @@ struct sdhci_msm_pltfm_data {
 	u32 *cpu_dma_latency_us;
 	unsigned int cpu_dma_latency_tbl_sz;
 	int status_gpio; /* card detection GPIO that is configured as IRQ */
+	int enable_gpio; /* card power enable GPIO that is replaced L11 pin */  //ASUS_BSP Deeo : for gpio enable pin +++
 	struct sdhci_msm_bus_voting_data *voting_data;
 	u32 *sup_clk_table;
 	unsigned char sup_clk_cnt;
@@ -324,6 +325,7 @@ struct sdhci_msm_pltfm_data {
 	int sdiowakeup_irq;
 	enum pm_qos_req_type cpu_affinity_type;
 	cpumask_t cpu_affinity_mask;
+	char *name;		//ASUS_BSP Deeo : add host_name to pdata +++
 };
 
 struct sdhci_msm_bus_vote {
@@ -363,6 +365,7 @@ struct sdhci_msm_host {
 	bool is_sdiowakeup_enabled;
 	atomic_t controller_clock;
 	bool use_cdclp533;
+	struct device_attribute cd_status_attr; //ASU_BSP Deeo : add for sd_status
 };
 
 enum vdd_io_level {
@@ -463,6 +466,24 @@ static ssize_t show_auto_cmd21(struct device *dev,
 
 	return snprintf(buf, PAGE_SIZE, "%d\n", msm_host->en_auto_cmd21);
 }
+
+//ASUS_BSP Deeo : add for sd_status +++
+static ssize_t store_cd_status(struct device *dev, struct device_attribute
+				*attr, const char *buf, size_t count)
+{
+	return count;
+}
+
+static ssize_t show_cd_status(struct device *dev,
+			       struct device_attribute *attr, char *buf)
+{
+	struct sdhci_host *host = dev_get_drvdata(dev);
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", !gpio_get_value(msm_host->pdata->status_gpio));
+}
+//ASUS_BSP Deeo : add for sd_status ---
 
 /* MSM auto-tuning handler */
 static int sdhci_msm_config_auto_tuning_cmd(struct sdhci_host *host,
@@ -1675,6 +1696,7 @@ static struct sdhci_msm_pltfm_data *sdhci_msm_populate_pdata(struct device *dev,
 	int len, i, mpm_int;
 	int clk_table_len;
 	u32 *clk_table = NULL;
+	u8 rc;	//ASUS_BSP Deeo : add return value for request gpio +++
 	enum of_gpio_flags flags = OF_GPIO_ACTIVE_LOW;
 
 	pdata = devm_kzalloc(dev, sizeof(*pdata), GFP_KERNEL);
@@ -1686,6 +1708,26 @@ static struct sdhci_msm_pltfm_data *sdhci_msm_populate_pdata(struct device *dev,
 	pdata->status_gpio = of_get_named_gpio_flags(np, "cd-gpios", 0, &flags);
 	if (gpio_is_valid(pdata->status_gpio) & !(flags & OF_GPIO_ACTIVE_LOW))
 		pdata->caps2 |= MMC_CAP2_CD_ACTIVE_HIGH;
+
+	printk("[SD] pdata->status_gpio %d\n", pdata->status_gpio);
+
+	//ASUS_BSP Deeo : request gpio enable pin +++
+	pdata->enable_gpio= of_get_named_gpio_flags(np, "en-gpios", 0, &flags);
+	printk("[SD] pdata->enable_gpio %d\n", pdata->enable_gpio);
+	if (gpio_is_valid(pdata->enable_gpio)) {
+		printk("[SD] pdata->enable_gpio %d\n", pdata->enable_gpio);
+		rc = gpio_request(pdata->enable_gpio, "sd-en-gpio");
+		if(rc) {
+			printk("[SD] free GPIO %d\n", pdata->enable_gpio);
+			gpio_free(pdata->enable_gpio);
+		}
+		rc = gpio_direction_output(pdata->enable_gpio, 0);
+		if(rc) {
+			printk("[SD] free GPIO %d\n", pdata->enable_gpio);
+			gpio_free(pdata->enable_gpio);
+		}
+	}
+	//ASUS_BSP Deeo : request gpio enable pin ---
 
 	of_property_read_u32(np, "qcom,bus-width", &bus_width);
 	if (bus_width == 8)
@@ -2165,15 +2207,61 @@ static int sdhci_msm_setup_vreg(struct sdhci_msm_pltfm_data *pdata,
 		goto out;
 	}
 
-	vreg_table[0] = curr_slot->vdd_data;
-	vreg_table[1] = curr_slot->vdd_io_data;
+	//ASUS_BSP : adjust SD power off sequence +++
+	if (!strcmp(pdata->name,"mmc1") && !enable) {
+		vreg_table[1] = curr_slot->vdd_data;
+		vreg_table[0] = curr_slot->vdd_io_data;
+	} else {
+		vreg_table[0] = curr_slot->vdd_data;
+		vreg_table[1] = curr_slot->vdd_io_data;
+	}
+	//ASUS_BSP : adjust SD power off sequence ---
 
 	for (i = 0; i < ARRAY_SIZE(vreg_table); i++) {
 		if (vreg_table[i]) {
-			if (enable)
-				ret = sdhci_msm_vreg_enable(vreg_table[i]);
-			else
-				ret = sdhci_msm_vreg_disable(vreg_table[i]);
+			if (enable) {
+				if (strcmp(pdata->name,"mmc1") || !strcmp(vreg_table[i]->name,"vdd-io")) {		//ASUS_BSP Deeo : except not mmc1 nost & vdd-io
+					ret = sdhci_msm_vreg_enable(vreg_table[i]);
+				//ASUS_BSP Deeo : Replace L11 enable pin to GPIO +++
+				} else {
+					//if ((g_ASUS_hwID < ZE500KL_ER1) || (ZE500KG_EVB <= g_ASUS_hwID &&  g_ASUS_hwID < ZE500KG_ER1)
+					//					|| (ZE500KL_CMCC_EVB <= g_ASUS_hwID && g_ASUS_hwID < ZE500KL_CMCC_ER1)) {
+					if (!gpio_is_valid(pdata->enable_gpio)) {
+						printk("[SD] use LDO11 as power\n");
+						ret = sdhci_msm_vreg_enable(vreg_table[i]);
+					} else if (!strcmp(vreg_table[i]->name,"vdd")) {
+						if (gpio_is_valid(pdata->enable_gpio)) {
+							gpio_set_value(pdata->enable_gpio, 1);
+							printk("[SD] enable_gpio %d\n", gpio_get_value(pdata->enable_gpio));
+						}
+					}
+				}
+				//ASUS_BSP Deeo : Replace L11 enable pin to GPIO ---
+			}else {
+				if (strcmp(pdata->name,"mmc1") || !strcmp(vreg_table[i]->name,"vdd-io")) {		//ASUS_BSP Deeo : except not mmc1 nost & vdd-io
+					ret = sdhci_msm_vreg_disable(vreg_table[i]);
+
+					//ASUS_BSP : add delay time after close mmc1 vdd-io +++
+					if (!strcmp(pdata->name,"mmc1"))
+						msleep(10);
+					//ASUS_BSP : add delay time after close mmc1 vdd-io ---
+
+				//ASUS_BSP Deeo : Replace L11 enable pin to GPIO +++
+				} else {
+					//if ((g_ASUS_hwID < ZE500KL_ER1) || (ZE500KG_EVB <= g_ASUS_hwID &&  g_ASUS_hwID < ZE500KG_ER1)
+					//					|| (ZE500KL_CMCC_EVB <= g_ASUS_hwID && g_ASUS_hwID < ZE500KL_CMCC_ER1)) {
+					if (!gpio_is_valid(pdata->enable_gpio)) {
+						printk("[SD] use LDO11 as power\n");
+						ret = sdhci_msm_vreg_disable(vreg_table[i]);
+					} else if (!strcmp(vreg_table[i]->name,"vdd")) {
+						if (gpio_is_valid(pdata->enable_gpio)) {
+							gpio_set_value(pdata->enable_gpio, 0);
+							printk("[SD] enable_gpio %d\n", gpio_get_value(pdata->enable_gpio));
+						}
+					}
+				}
+				//ASUS_BSP Deeo : Replace L11 enable pin to GPIO ---
+			}
 			if (ret)
 				goto out;
 		}
@@ -2342,6 +2430,8 @@ static irqreturn_t sdhci_msm_pwr_irq(int irq, void *data)
 	irq_status = readb_relaxed(msm_host->core_mem + CORE_PWRCTL_STATUS);
 	pr_debug("%s: Received IRQ(%d), status=0x%x\n",
 		mmc_hostname(msm_host->mmc), irq, irq_status);
+
+	printk("%s: Received IRQ(%d), status=0x%x\n", mmc_hostname(msm_host->mmc), irq, irq_status);
 
 	/* Clear the interrupt */
 	writeb_relaxed(irq_status, (msm_host->core_mem + CORE_PWRCTL_CLEAR));
@@ -3276,6 +3366,8 @@ static void sdhci_set_default_hw_caps(struct sdhci_msm_host *msm_host,
 	writel_relaxed(caps, host->ioaddr + CORE_VENDOR_SPEC_CAPABILITIES0);
 }
 
+extern void create_emmc_health_proc_file(void);  //ASUS_BSP lei_guo : add proc file node for eMMC health +++
+extern void create_storage_health_proc_file(void); //ASUS_BSP Hank2_Liu 20161202 : Add proc file node to read emmc health status +++
 static int sdhci_msm_probe(struct platform_device *pdev)
 {
 	struct sdhci_host *host;
@@ -3307,6 +3399,7 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	msm_host->mmc = host->mmc;
 	msm_host->pdev = pdev;
 
+	printk("[MMC] hostname : %s\n", mmc_hostname(msm_host->mmc));
 	/* Extract platform data */
 	if (pdev->dev.of_node) {
 		ret = of_alias_get_id(pdev->dev.of_node, "sdhc");
@@ -3327,6 +3420,14 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 			dev_err(&pdev->dev, "DT parsing error\n");
 			goto pltfm_free;
 		}
+
+		//ASUS_BSP Deeo : add host_name to pdata +++
+		if (!strcmp(mmc_hostname(msm_host->mmc),"mmc1"))
+			msm_host->pdata->name = "mmc1";
+		else
+			msm_host->pdata->name = "";
+		//ASUS_BSP Deeo : add host_name to pdata ---
+
 	} else {
 		dev_err(&pdev->dev, "No device tree node\n");
 		goto pltfm_free;
@@ -3559,7 +3660,9 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	msm_host->mmc->caps2 |= MMC_CAP2_ASYNC_SDIO_IRQ_4BIT_MODE;
 	msm_host->mmc->pm_caps |= MMC_PM_KEEP_POWER | MMC_PM_WAKE_SDIO_IRQ;
 	msm_host->mmc->caps2 |= MMC_CAP2_CORE_PM;
-
+	//ASUS_BSP +++ Allen_Zhuang "card detect config"
+       msm_host->mmc->cd_delay = 200;   //default 200ms
+	//ASUS_BSP --- Allen_Zhuang "card detect config"
 	if (msm_host->pdata->nonremovable)
 		msm_host->mmc->caps |= MMC_CAP_NONREMOVABLE;
 
@@ -3661,6 +3764,29 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 		       mmc_hostname(host->mmc), __func__, ret);
 		device_remove_file(&pdev->dev, &msm_host->auto_cmd21_attr);
 	}
+
+	//ASUS BSP Deeo : add for sd_status +++
+	if (!strcmp("mmc1",mmc_hostname(host->mmc))) {
+		msm_host->cd_status_attr.show = show_cd_status;
+		msm_host->cd_status_attr.store = store_cd_status;
+		sysfs_attr_init(&msm_host->cd_status_attr.attr);
+		msm_host->cd_status_attr.attr.name = "cd_gpio_status";
+		msm_host->cd_status_attr.attr.mode = S_IRUGO | S_IWUSR;
+		ret = device_create_file(&pdev->dev, &msm_host->cd_status_attr);
+		if (ret) {
+			pr_err("%s: %s: failed creating auto-cmd21 attr: %d\n",
+				   mmc_hostname(host->mmc), __func__, ret);
+			device_remove_file(&pdev->dev, &msm_host->cd_status_attr);
+		}
+	}
+	//ASUS BSP Deeo : add for sd_status ---
+
+	//ASUS BSP lei_guo : create proc file +++
+	if (!strcmp("mmc0",mmc_hostname(host->mmc))) {
+		create_emmc_health_proc_file();
+		create_storage_health_proc_file();
+	}
+	//ASUS BSP lei_guo : create proc file ---
 
 	if (msm_host->pdata->mpm_sdiowakeup_int != -1) {
 		ret = sdhci_msm_cfg_mpm_pin_wakeup(host, SDC_DAT1_ENABLE);
@@ -3866,8 +3992,12 @@ static int sdhci_msm_suspend(struct device *dev)
 	struct sdhci_msm_host *msm_host = pltfm_host->priv;
 	int ret = 0;
 
-	if (gpio_is_valid(msm_host->pdata->status_gpio))
-		mmc_gpio_free_cd(msm_host->mmc);
+	if (gpio_is_valid(msm_host->pdata->status_gpio)) {
+		// ASUS_BSP Deeo : set cd-gpio to wake up souce +++
+		//mmc_gpio_free_cd(msm_host->mmc);
+		enable_irq_wake(gpio_to_irq(msm_host->pdata->status_gpio));
+		// ASUS_BSP Deeo : set cd-gpio to wake up souce ---
+	}
 
 	if (pm_runtime_suspended(dev)) {
 		pr_debug("%s: %s: already runtime suspended\n",
@@ -3888,11 +4018,16 @@ static int sdhci_msm_resume(struct device *dev)
 	int ret = 0;
 
 	if (gpio_is_valid(msm_host->pdata->status_gpio)) {
+		// ASUS_BSP Deeo : set cd-gpio to wake up souce +++
+		disable_irq_wake(gpio_to_irq(msm_host->pdata->status_gpio));
+		#if 0
 		ret = mmc_gpio_request_cd(msm_host->mmc,
 				msm_host->pdata->status_gpio);
 		if (ret)
 			pr_err("%s: %s: Failed to request card detection IRQ %d\n",
 					mmc_hostname(host->mmc), __func__, ret);
+		#endif
+		// ASUS_BSP Deeo : set cd-gpio to wake up souce ---
 	}
 
 	if (pm_runtime_suspended(dev)) {

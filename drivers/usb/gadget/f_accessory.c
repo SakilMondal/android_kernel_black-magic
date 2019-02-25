@@ -307,6 +307,7 @@ static void acc_complete_in(struct usb_ep *ep, struct usb_request *req)
 
 	if (req->status == -ESHUTDOWN) {
 		pr_debug("acc_complete_in set disconnected");
+		printk("acc_complete_in set disconnected");
 		acc_set_disconnected(dev);
 	}
 
@@ -322,6 +323,7 @@ static void acc_complete_out(struct usb_ep *ep, struct usb_request *req)
 	dev->rx_done = 1;
 	if (req->status == -ESHUTDOWN) {
 		pr_debug("acc_complete_out set disconnected");
+		printk("acc_complete_out set disconnected");
 		acc_set_disconnected(dev);
 	}
 
@@ -606,6 +608,7 @@ static ssize_t acc_read(struct file *fp, char __user *buf,
 	int ret = 0;
 
 	pr_debug("acc_read(%zu)\n", count);
+	printk("acc_read(%zu)\n", count);
 
 	if (dev->disconnected) {
 		pr_debug("acc_read disconnected");
@@ -619,6 +622,7 @@ static ssize_t acc_read(struct file *fp, char __user *buf,
 
 	/* we will block until we're online */
 	pr_debug("acc_read: waiting for online\n");
+	printk("acc_read disconnected");
 	ret = wait_event_interruptible(dev->read_wq, dev->online);
 	if (ret < 0) {
 		r = ret;
@@ -653,6 +657,7 @@ requeue_req:
 			// cancel failed. There can be a data already received.
 			// it will be retrieved in the next read.
 			pr_debug("acc_read: cancelling failed %d", ret);
+			printk("acc_read: cancelling failed %d", ret);
 		}
 		goto done;
 	}
@@ -687,15 +692,18 @@ static ssize_t acc_write(struct file *fp, const char __user *buf,
 	int ret;
 
 	pr_debug("acc_write(%zu)\n", count);
+	printk("acc_write(%zu)\n", count);
 
 	if (!dev->online || dev->disconnected) {
 		pr_debug("acc_write disconnected or not online");
+		printk("acc_write disconnected or not online");
 		return -ENODEV;
 	}
 
 	while (count > 0) {
 		if (!dev->online) {
 			pr_debug("acc_write dev->error\n");
+			printk("acc_write dev->error\n");
 			r = -EIO;
 			break;
 		}
@@ -722,6 +730,7 @@ static ssize_t acc_write(struct file *fp, const char __user *buf,
 		ret = usb_ep_queue(dev->ep_in, req, GFP_KERNEL);
 		if (ret < 0) {
 			pr_debug("acc_write: xfer error %d\n", ret);
+			printk("acc_write: xfer error %d\n", ret);
 			r = -EIO;
 			break;
 		}
@@ -782,9 +791,10 @@ static long acc_ioctl(struct file *fp, unsigned code, unsigned long value)
 static int acc_open(struct inode *ip, struct file *fp)
 {
 	printk(KERN_INFO "acc_open\n");
-	if (atomic_xchg(&_acc_dev->open_excl, 1))
+	if (atomic_xchg(&_acc_dev->open_excl, 1)){
+		printk("[USB] acc_open busy\n");
 		return -EBUSY;
-
+	}
 	_acc_dev->disconnected = 0;
 	fp->private_data = _acc_dev;
 	return 0;

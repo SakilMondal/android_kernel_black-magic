@@ -35,6 +35,15 @@
 #include <linux/qcom/diag_dload.h>
 
 #include "gadget_chips.h"
+//ASUS_BSP+++ Show_Wang "set serialno refer to /factory/SSN"
+#ifdef  ASUS_ZC550KL_PROJECT
+#define SSN_WRITE
+#endif
+
+#ifdef SSN_WRITE
+#include  <linux/oem_functions.h>
+#endif
+//ASUS_BSP--- Show_Wang "set serialno refer to /factory/SSN"
 
 #include "f_fs.c"
 #ifdef CONFIG_SND_PCM
@@ -59,6 +68,7 @@
 #include "u_ctrl_hsuart.c"
 #include "u_data_hsuart.c"
 #include "f_ccid.c"
+#include "f_pclink.c"
 #include "f_mtp.c"
 #include "f_accessory.c"
 #include "f_rndis.c"
@@ -86,6 +96,20 @@ MODULE_LICENSE("GPL");
 MODULE_VERSION("1.0");
 
 static const char longname[] = "Gadget Android";
+//ASUS_BSP+++ "[USB][NA][Spec] add diag enable support in kernel"
+static int diag_enable = 0;
+//ASUS_BSP--- "[USB][NA][Spec] add diag enable support in kernel"
+//ASUS_BSP+++ Show_Wang "[ZC550KL][USB][Spec] enable diag in charger and factory mode"
+#if defined(ASUS_ZC550KL_PROJECT) && defined(CONFIG_ENABLE_FACTORY_DIAG)
+static int last_diag_status = 0;
+#endif
+//ASUS_BSP--- Show_Wang "[ZC550KL][USB][Spec] enable diag in charger and factory mode"
+
+//ASUS_BSP+++ "[ZE500KL][USB][NA][Other]Add ECM support for MAC"
+extern int getMACConnect(void);
+extern int resetHostTypeChanged(void);
+extern int getHostTypeChanged(void);
+//ASUS_BSP--- "[ZE500KL][USB][NA][Other]Add ECM support for MAC"
 
 /* Default vendor and product IDs, overridden by userspace */
 #define VENDOR_ID		0x18D1
@@ -97,6 +121,8 @@ static const char longname[] = "Gadget Android";
 #define MIDI_OUTPUT_PORTS   1
 #define MIDI_BUFFER_SIZE    1024
 #define MIDI_QUEUE_LENGTH   32
+
+extern struct completion gadget_init;
 
 struct android_usb_function {
 	char *name;
@@ -247,6 +273,11 @@ static int usb_diag_update_pid_and_serial_num(uint32_t pid, const char *snum);
 static char manufacturer_string[256];
 static char product_string[256];
 static char serial_string[256];
+//ASUS_BSP+++ Show_Wang "set serialno refer to /factory/SSN"
+#ifdef SSN_WRITE
+static char g_oem_ssn_str[256];
+#endif
+//ASUS_BSP--- Show_Wang "set serialno refer to /factory/SSN"
 
 /* String Table */
 static struct usb_string strings_dev[] = {
@@ -298,6 +329,35 @@ static const char *pm_qos_to_string(enum android_pm_qos_state state)
 	default:		return "INVALID_STATE";
 	}
 }
+
+//ASUS_BSP+++ Show_Wang "[ZC550KL][USB][NA][Spec] add scsi cmd to enable diag"
+#ifdef ASUS_ZC550KL_PROJECT
+static ssize_t asus_factory_mode_switch_name(struct switch_dev *sdev, char *buf)
+{
+	return sprintf(buf, "factory_mode\n");
+}
+
+static ssize_t asus_factory_mode_switch_state(struct switch_dev *sdev, char *buf)
+{
+	return sprintf(buf, "%d\n", asus_factory_mode_state);
+}
+
+static int AsusFactoryModeNotifyInitialize(void)
+{
+	int ret = 0;
+	printk("[USB] %s: register switch dev! %d\n", __FUNCTION__, ret);
+	asus_switch_otg_factory_mode.name = "factorymode";
+	asus_switch_otg_factory_mode.print_state = asus_factory_mode_switch_state;
+	asus_switch_otg_factory_mode.print_name = asus_factory_mode_switch_name;
+	ret = switch_dev_register(&asus_switch_otg_factory_mode);
+	if (ret < 0) {
+	    printk("[USB] %s: Unable to register switch dev! %d\n", __FUNCTION__, ret);
+	    return -1;
+	}
+	return 0;
+}
+#endif
+//ASUS_BSP--- Show_Wang "[ZC550KL][USB][NA][Spec] add scsi cmd to enable diag"
 
 static void android_pm_qos_update_latency(struct android_dev *dev, u32 latency)
 {
@@ -404,6 +464,7 @@ static void android_work(struct work_struct *data)
 	char *configured[2]   = { "USB_STATE=CONFIGURED", NULL };
 	char *suspended[2]   = { "USB_STATE=SUSPENDED", NULL };
 	char *resumed[2]   = { "USB_STATE=RESUMED", NULL };
+	char *host_changed[2]   = { "USB_STATE=HOSTCHANGED", NULL };
 	char **uevent_envp = NULL;
 	static enum android_device_state last_uevent, next_state;
 	unsigned long flags;
@@ -470,6 +531,10 @@ static void android_work(struct work_struct *data)
 			kobject_uevent_env(&dev->dev->kobj, KOBJ_CHANGE,
 					   uevent_envp);
 			last_uevent = next_state;
+			if(getHostTypeChanged()){
+				kobject_uevent_env(&dev->dev->kobj, KOBJ_CHANGE, host_changed);
+				resetHostTypeChanged();
+			}
 		}
 		pr_info("%s: sent uevent %s\n", __func__, uevent_envp[0]);
 	} else {
@@ -499,6 +564,10 @@ static int android_enable(struct android_dev *dev)
 			}
 		}
 		usb_gadget_connect(cdev->gadget);
+		if(!gadget_init.done){
+			gadget_init.done=1;
+			complete(&gadget_init);
+		}
 	}
 
 	return err;
@@ -707,6 +776,43 @@ static void *functionfs_acquire_dev_callback(const char *dev_name)
 static void functionfs_release_dev_callback(struct ffs_data *ffs_data)
 {
 }
+
+/*-------------------------------------------------------------------------*/
+/* Supported functions initialization. Jeffrey: ASUS PCLink AP new adb, f_pclink.c */
+
+struct conn_gadget_data {
+	bool opened;
+	bool enabled;
+};
+
+static int pclink_function_init(struct android_usb_function *f,
+		struct usb_composite_dev *cdev)
+{
+	f->config = kzalloc(sizeof(struct conn_gadget_data), GFP_KERNEL);
+	if (!f->config)
+		return -ENOMEM;
+
+	return conn_gadget_setup();
+}
+
+static void pclink_function_cleanup(struct android_usb_function *f)
+{
+	conn_gadget_cleanup();
+	kfree(f->config);
+}
+
+static int pclink_function_bind_config(struct android_usb_function *f,
+		struct usb_configuration *c)
+{
+	return conn_gadget_bind_config(c);
+}
+
+static struct android_usb_function pclink_function = {
+	.name = "pclink",
+	.init = pclink_function_init,
+	.cleanup = pclink_function_cleanup,
+	.bind_config = pclink_function_bind_config,
+};
 
 /* ACM */
 static char acm_transports[32];	/*enabled ACM ports - "tty[,sdio]"*/
@@ -2037,10 +2143,11 @@ rndis_function_bind_config(struct android_usb_function *f,
 	pr_info("%s MAC: %02X:%02X:%02X:%02X:%02X:%02X\n", __func__,
 		rndis->ethaddr[0], rndis->ethaddr[1], rndis->ethaddr[2],
 		rndis->ethaddr[3], rndis->ethaddr[4], rndis->ethaddr[5]);
-
+	/*
 	if (rndis->ethaddr[0])
 		dev = gether_setup_name(c->cdev->gadget, NULL, "rndis");
 	else
+	*/
 		dev = gether_setup_name(c->cdev->gadget, rndis->ethaddr,
 								"rndis");
 	if (IS_ERR(dev)) {
@@ -2408,13 +2515,12 @@ struct mass_storage_function_config {
 static int mass_storage_function_init(struct android_usb_function *f,
 					struct usb_composite_dev *cdev)
 {
-	struct android_dev *dev = cdev_to_android_dev(cdev);
 	struct mass_storage_function_config *config;
 	struct fsg_common *common;
 	int err;
 	int i, n;
 	char name[FSG_MAX_LUNS][MAX_LUN_NAME];
-	u8 uicc_nluns = dev->pdata ? dev->pdata->uicc_nluns : 0;
+	u8 uicc_nluns = 0;
 
 	config = kzalloc(sizeof(struct mass_storage_function_config),
 							GFP_KERNEL);
@@ -2424,16 +2530,10 @@ static int mass_storage_function_init(struct android_usb_function *f,
 	}
 
 	config->fsg.nluns = 1;
-	snprintf(name[0], MAX_LUN_NAME, "lun");
-	config->fsg.luns[0].removable = 1;
-
-	if (dev->pdata && dev->pdata->cdrom) {
-		config->fsg.luns[config->fsg.nluns].cdrom = 1;
-		config->fsg.luns[config->fsg.nluns].ro = 1;
-		config->fsg.luns[config->fsg.nluns].removable = 0;
-		snprintf(name[config->fsg.nluns], MAX_LUN_NAME, "rom");
-		config->fsg.nluns++;
-	}
+	snprintf(name[0], MAX_LUN_NAME, "rom");
+	config->fsg.luns[0].removable = 0;
+	config->fsg.luns[0].cdrom = 1;
+	config->fsg.luns[0].ro = 1;
 
 	if (uicc_nluns > FSG_MAX_LUNS - config->fsg.nluns) {
 		uicc_nluns = FSG_MAX_LUNS - config->fsg.nluns;
@@ -2848,6 +2948,7 @@ static struct android_usb_function midi_function = {
 #endif
 static struct android_usb_function *supported_functions[] = {
 	&ffs_function,
+	&pclink_function,
 	&mbim_function,
 	&ecm_qc_function,
 #ifdef CONFIG_SND_PCM
@@ -3156,6 +3257,14 @@ functions_store(struct device *pdev, struct device_attribute *attr,
 	int err;
 	int is_ffs;
 	int ffs_enabled = 0;
+//ASUS_BSP+++ Show_Wang "[ZC550KL][USB][Spec] enable diag in charger and factory mode"
+#if defined(ASUS_ZC550KL_PROJECT) && defined(CONFIG_ENABLE_FACTORY_DIAG)
+	if(last_diag_status == 1 && last_diag_status == diag_enable){
+		return -EBUSY;
+	}
+	printk("[USB] func before:%s  diag_enable %s\n",buff, diag_enable ? "enable":"disable");
+#endif
+//ASUS_BSP--- Show_Wang "[ZC550KL][USB][Spec] enable diag in charger and factory mode"
 
 	mutex_lock(&dev->mutex);
 
@@ -3179,7 +3288,31 @@ functions_store(struct device *pdev, struct device_attribute *attr,
 	}
 
 	strlcpy(buf, buff, sizeof(buf));
+	//ASUS_BSP+++ "[USB][NA][Spec] add diag enable support in kernel"
+//ASUS_BSP+++ Show_Wang "[ZC550KL][USB][Spec] enable diag in charger and factory mode"
+#if defined(ASUS_ZC550KL_PROJECT) && defined(CONFIG_ENABLE_FACTORY_DIAG)
+	if(diag_enable==1){
+		strlcpy(buf, "diag,adb,serial", sizeof("diag,adb,serial"));
+	}
+#else
+	if(diag_enable){
+		strlcpy(buf, "diag,serial,rmnet,adb", sizeof("diag,serial,rmnet,adb"));
+	}
+#endif
+//ASUS_BSP--- Show_Wang "[ZC550KL][USB][Spec] enable diag in charger and factory mode"
+	else {
+		strlcpy(buf, buff, sizeof(buf));
+	}
+	//ASUS_BSP--- "[USB][NA][Spec] add diag enable support in kernel"
 	b = strim(buf);
+
+	if(getMACConnect()){
+		printk("[USB] Connect to MAC\n");
+	}else{
+		printk("[USB] Connect to Other\n");
+	}
+	
+	printk("[USB] func:%s\n",buf);
 
 	dev->cdev->gadget->streaming_enabled = false;
 	while (b) {
@@ -3221,12 +3354,15 @@ functions_store(struct device *pdev, struct device_attribute *attr,
 					ffs_enabled = 1;
 				continue;
 			}
+			if(getMACConnect()&&strcmp(name,"rndis")==0){
+				err = android_enable_function(dev, conf, "ecm");
+			} else {
+				if (!strcmp(name, "rndis") &&
+					!strcmp(strim(rndis_transports), "BAM2BAM_IPA"))
+					name = "rndis_qc";
 
-			if (!strcmp(name, "rndis") &&
-				!strcmp(strim(rndis_transports), "BAM2BAM_IPA"))
-				name = "rndis_qc";
-
-			err = android_enable_function(dev, conf, name);
+				err = android_enable_function(dev, conf, name);
+			}
 			if (err)
 				pr_err("android_usb: Cannot enable '%s' (%d)",
 							name, err);
@@ -3267,6 +3403,13 @@ static ssize_t enable_store(struct device *pdev, struct device_attribute *attr,
 
 	if (!cdev)
 		return -ENODEV;
+//ASUS_BSP+++ Show_Wang "[ZC550KL][USB][Spec] enable diag in charger and factory mode"
+#if defined(ASUS_ZC550KL_PROJECT) && defined(CONFIG_ENABLE_FACTORY_DIAG)
+	if(last_diag_status == 1 && last_diag_status == diag_enable){
+		return  -ENODEV;
+	}
+#endif
+//ASUS_BSP--- Show_Wang "[ZC550KL][USB][Spec] enable diag in charger and factory mode"
 
 	mutex_lock(&dev->mutex);
 
@@ -3288,11 +3431,33 @@ static ssize_t enable_store(struct device *pdev, struct device_attribute *attr,
 		 * pull-up is enabled immediately. The enumeration is
 		 * reliable with 100 msec delay.
 		 */
+		//ASUS_BSP+++ "[USB][NA][Spec] add diag enable support in kernel"
+		if(diag_enable){
+			cdev->desc.idVendor = __constant_cpu_to_le16(0x05C6);
+//ASUS_BSP+++ Show_Wang "[ZC550KL][USB][Spec] enable diag in charger and factory mode"
+#if defined(ASUS_ZC550KL_PROJECT) && defined(CONFIG_ENABLE_FACTORY_DIAG)
+			cdev->desc.idProduct = __constant_cpu_to_le16(0x9025);
+#else
+			cdev->desc.idProduct = __constant_cpu_to_le16(0x9091);
+#endif
+//ASUS_BSP--- Show_Wang "[ZC550KL][USB][Spec] enable diag in charger and factory mode"
+		}
+//ASUS_BSP+++ Show_Wang "[ZC550KL][USB][Spec] enable diag in charger and factory mode"
+#if defined(ASUS_ZC550KL_PROJECT) && defined(CONFIG_ENABLE_FACTORY_DIAG)
+		last_diag_status=diag_enable;
+#endif
+//ASUS_BSP--- Show_Wang "[ZC550KL][USB][Spec] enable diag in charger and factory mode"
+		//ASUS_BSP--- "[USB][NA][Spec] add diag enable support in kernel"
 		list_for_each_entry(conf, &dev->configs, list_item)
 			list_for_each_entry(f_holder, &conf->enabled_functions,
 						enabled_list) {
 				if (f_holder->f->enable)
 					f_holder->f->enable(f_holder->f);
+				//ASUS_BSP+++ "[ZE500KL][USB][NA][Other]Add ECM support for MAC"
+				if(strncmp(f_holder->f->name,"ecm",3)==0){
+					cdev->desc.bDeviceClass = USB_CLASS_COMM;
+				}
+				//ASUS_BSP--- "[ZE500KL][USB][NA][Other]Add ECM support for MAC"
 				if (!strncmp(f_holder->f->name,
 						"audio_source", 12))
 					audio_enabled = true;
@@ -3376,6 +3541,67 @@ out:
 	return snprintf(buf, PAGE_SIZE, "%s\n", state);
 }
 
+//ASUS_BSP+++ Show_Wang "set serialno refer to /factory/SSN"
+#ifdef SSN_WRITE
+static void set_serialno(void)
+{
+		strlcpy(g_oem_ssn_str, get_oem_ssn(), sizeof(g_oem_ssn_str) - 1);
+
+		if( g_oem_ssn_str != NULL &&
+				( (g_oem_ssn_str[0] >= 0x30 && g_oem_ssn_str[0] <= 0x5a) || (g_oem_ssn_str[0] >= 0x61 && g_oem_ssn_str[0] <= 0x7a)))
+		{
+			strlcpy(serial_string, g_oem_ssn_str, sizeof(serial_string) - 1);
+			printk("%s: get SSN from factory/SSN , serialno is %s\n", __func__, serial_string);
+		} else {
+			printk("%s: factory/SSN check fail, use default value C4ATAS000000\n", __func__);
+			strlcpy(serial_string, "C4ATAS000000", sizeof(serial_string) - 1);
+		}
+}
+#endif
+//ASUS_BSP--- Show_Wang "set serialno refer to /factory/SSN"
+
+//ASUS_BSP+++ "[USB][NA][Spec] add diag enable support in kernel"
+static ssize_t diag_show(struct device *pdev, struct device_attribute *attr,
+							char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", diag_enable);
+}
+static ssize_t diag_store(struct device *pdev, struct device_attribute *attr,
+							const char *buff, size_t size)
+{
+	sscanf(buff, "%d", &diag_enable);
+	return size;
+}
+static ssize_t serial_show(struct device *pdev, struct device_attribute *attr,
+							char *buf)
+{
+	printk("%s: %s\n", __func__, serial_string);
+	return snprintf(buf, PAGE_SIZE, "%s\n", serial_string);
+}
+static ssize_t serial_store(struct device *pdev, struct device_attribute *attr,
+							const char *buff, size_t size)
+{
+	printk("%s: %s\n", __func__, buff);
+	//ensure SSN number in the ASCII range of "0" to "Z"
+//ASUS_BSP+++ Show_Wang "set serialno refer to /factory/SSN"
+#ifdef SSN_WRITE
+	if((buff[0] >= 0x30 && buff[0] <= 0x5a) || (buff[0] >= 0x61 && buff[0] <= 0x7a))
+		{
+			sscanf(buff, "%s", serial_string);
+		}
+#else
+	if(buff[0] >= 0x30 && buff[0] <= 0x5a)
+		sscanf(buff, "%s", serial_string);
+#endif
+//ASUS_BSP--- Show_Wang "set serialno refer to /factory/SSN"
+	else {
+		printk("%s: buff[0] check fail, use default value C4ATAS000000\n", __func__);
+		sscanf("C4ATAS000000", "%s", serial_string);
+	}
+	return size;
+}
+//ASUS_BSP--- "[USB][NA][Spec] add diag enable support in kernel"
+
 #define ANDROID_DEV_ATTR(field, format_string)				\
 static ssize_t								\
 field ## _show(struct device *pdev, struct device_attribute *attr,	\
@@ -3450,7 +3676,14 @@ DESCRIPTOR_ATTR(bDeviceSubClass, "%d\n")
 DESCRIPTOR_ATTR(bDeviceProtocol, "%d\n")
 DESCRIPTOR_STRING_ATTR(iManufacturer, manufacturer_string)
 DESCRIPTOR_STRING_ATTR(iProduct, product_string)
-DESCRIPTOR_STRING_ATTR(iSerial, serial_string)
+//ASUS_BSP+++ "[USB][NA][Spec] only allow other modify iSerial in Factory"
+//DESCRIPTOR_STRING_ATTR(iSerial, serial_string)
+#ifdef ASUS_FACTORY_BUILD
+static DEVICE_ATTR(iSerial, S_IRUGO | S_IWUGO, serial_show, serial_store);
+#else
+static DEVICE_ATTR(iSerial, S_IRUGO | S_IWUSR, serial_show, serial_store);
+#endif
+//ASUS_BSP--- "[USB][NA][Spec] only allow other modify iSerial in Factory"
 
 static DEVICE_ATTR(functions, S_IRUGO | S_IWUSR, functions_show,
 						 functions_store);
@@ -3468,6 +3701,10 @@ static DEVICE_ATTR(state, S_IRUGO, state_show, NULL);
 static DEVICE_ATTR(remote_wakeup, S_IRUGO | S_IWUSR,
 		remote_wakeup_show, remote_wakeup_store);
 
+//ASUS_BSP+++ "[USB][NA][Spec] add diag enable support in kernel"
+static DEVICE_ATTR(diag, S_IRUGO | S_IWUSR, diag_show, diag_store);
+//ASUS_BSP--- "[USB][NA][Spec] add diag enable support in kernel"
+
 static struct device_attribute *android_usb_attributes[] = {
 	&dev_attr_idVendor,
 	&dev_attr_idProduct,
@@ -3481,6 +3718,9 @@ static struct device_attribute *android_usb_attributes[] = {
 	&dev_attr_functions,
 	&dev_attr_enable,
 	&dev_attr_pm_qos,
+	//ASUS_BSP+++ "[USB][NA][Spec] add diag enable support in kernel"
+	&dev_attr_diag,
+	//ASUS_BSP--- "[USB][NA][Spec] add diag enable support in kernel"
 	&dev_attr_up_pm_qos_sample_sec,
 	&dev_attr_down_pm_qos_sample_sec,
 	&dev_attr_up_pm_qos_threshold,
@@ -3561,7 +3801,13 @@ static int android_bind(struct usb_composite_dev *cdev)
 	strlcpy(manufacturer_string, "Android",
 		sizeof(manufacturer_string) - 1);
 	strlcpy(product_string, "Android", sizeof(product_string) - 1);
-	strlcpy(serial_string, "0123456789ABCDEF", sizeof(serial_string) - 1);
+//ASUS_BSP+++ Show_Wang "set serialno refer to /factory/SSN"
+#ifdef SSN_WRITE
+		set_serialno();
+#else
+		strlcpy(serial_string, "0123456789ABCDEF", sizeof(serial_string) - 1);
+#endif
+//ASUS_BSP--- Show_Wang "set serialno refer to /factory/SSN"
 
 	id = usb_string_id(cdev);
 	if (id < 0)
@@ -3898,6 +4144,8 @@ static int android_probe(struct platform_device *pdev)
 
 		pdata->cdrom = of_property_read_bool(pdev->dev.of_node,
 			"qcom,android-usb-cdrom");
+		// ASUS BSP "[ZE500KL][USB][NA][Spec]Add cdrom to put installation file"
+		pdata->cdrom = 1;
 		ret = of_property_read_u8(pdev->dev.of_node,
 				"qcom,android-usb-uicc-nluns",
 				&pdata->uicc_nluns);
@@ -3968,6 +4216,12 @@ static int android_probe(struct platform_device *pdev)
 				__func__);
 		goto err_probe;
 	}
+
+//ASUS_BSP+++ Show_Wang "[ZC550KL][USB][NA][Spec] add scsi cmd to enable diag"
+#ifdef ASUS_ZC550KL_PROJECT
+	AsusFactoryModeNotifyInitialize();
+#endif
+//ASUS_BSP--- Show_Wang "[ZC550KL][USB][NA][Spec] add scsi cmd to enable diag"
 
 	/* pm qos request to prevent apps idle power collapse */
 	android_dev->curr_pm_qos_state = NO_USB_VOTE;

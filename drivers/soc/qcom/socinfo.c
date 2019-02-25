@@ -33,6 +33,14 @@
 #include <soc/qcom/smem.h>
 #include <soc/qcom/boot_stats.h>
 
+//ASUS BSP: Enter_Zhang+++
+#ifdef ASUS_ZC550KL_PROJECT
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
+#include <linux/oem_functions.h>
+#endif
+//ASUS BSP: Enter_Zhang---
+
 #define BUILD_ID_LENGTH 32
 #define SMEM_IMAGE_VERSION_BLOCKS_COUNT 32
 #define SMEM_IMAGE_VERSION_SINGLE_BLOCK_SIZE 128
@@ -1439,3 +1447,253 @@ const int cpu_is_krait_v3(void)
 		return 0;
 	};
 }
+
+//ASUS BSP: Enter_Zhang+++
+#ifdef ASUS_ZC550KL_PROJECT
+static struct oem_shared_info* msm_get_hardware_info(void)
+{
+	return (struct oem_shared_info*)smem_find(SMEM_ID_VENDOR0, sizeof(struct oem_shared_info), 0, SMEM_ANY_HOST_FLAG);
+}
+
+static void
+msm_get_boot_image_version(struct seq_file *s, int image_index, const char* image_name, bool show_oem_version)
+{
+	char *string_address;
+	char *oem_version;
+	char *qc_version;
+
+	string_address = socinfo_get_image_version_base_address();
+	if (string_address == NULL) {
+		pr_err("%s : Failed to get image version base address",
+				__func__);
+		return;
+	}
+	string_address += image_index * SMEM_IMAGE_VERSION_SINGLE_BLOCK_SIZE;
+
+	seq_printf(s, "%s: ", image_name);
+	if(show_oem_version)
+	{
+		oem_version = string_address + SMEM_IMAGE_VERSION_OEM_OFFSET;
+		seq_printf(s, "%-.32s\n", oem_version);
+	}
+	else
+	{
+		qc_version = string_address;
+		if(strlen(qc_version) >= 3 && qc_version[2] == ':')
+		{
+			qc_version += 3;
+		}
+		seq_printf(s, "%-.75s\n", qc_version);
+	}
+}
+
+void oem_get_ddr_info_str(struct seq_file *s, const struct oem_shared_ddr_info* ddr_info)
+{
+	const char* ddr_type_list[] =
+	{
+		"LPDDR2", "S2_SDRAM", "N_NVM", "LPDDR3"
+	};
+
+	const char* manuf_name = "UNKNOWN";
+	const char* ddr_type = "UNKNOWN";
+	const char* ddr_density = "UNKNOWN";
+
+	switch(ddr_info->manufacture_name)
+	{
+		case 0x1u:
+			manuf_name = "Samsung";
+			break;
+		case 0x6u:
+			manuf_name = "Hynix";
+			break;
+		case 0x3u:
+		case 0xFFu:
+			manuf_name = "Micron";
+			break;
+	}
+
+	if(ddr_info->device_type < sizeof(ddr_type_list) / sizeof(ddr_type_list[0]))
+	{
+		ddr_type = ddr_type_list[ddr_info->device_type];
+	}
+
+	switch(ddr_info->device_density_cs0 + ddr_info->device_density_cs1)
+	{
+		case 512u:
+			ddr_density = "512M";
+			break;
+		case 768u:
+			ddr_density = "768M";
+			break;
+		case 1024u:
+			ddr_density = "1G";
+			break;
+		case 1536u:
+			ddr_density = "1.5G";
+			break;
+		case 2048u:
+			ddr_density = "2G";
+			break;
+		case 3072u:
+			ddr_density = "3G";
+			break;
+		case 4096u:
+			ddr_density = "4G";
+			break;
+	}
+
+	seq_printf(s, "%s %s %s Rev.%04X\n", manuf_name, ddr_type, ddr_density, ddr_info->revision);
+}
+
+void oem_get_emmc_info_str(struct seq_file *s, const struct oem_shared_emmc_info* emmc_info)
+{
+	const char* manuf_name = "UNKNOWN";
+	const char* cap_str = "?G";
+	uint32_t cap_in_MB = 0;
+
+	switch(emmc_info->manufacturer_id)
+	{
+		case 0x13u:
+			manuf_name = "Micron";
+			break;
+		case 0x15u:
+			manuf_name = "Samsung";
+			break;
+		case 0x90u:
+			manuf_name = "Hynix";
+			break;
+	}
+
+	cap_in_MB =  emmc_info->block_count / (1024u * 1024u / emmc_info->bytes_per_block);
+	if(cap_in_MB > 3 * 1024u && cap_in_MB < 5 * 1024u)
+	{
+		cap_str = "4G";
+	}
+	else if(cap_in_MB > 6 * 1024u && cap_in_MB < 9 * 1024u)
+	{
+		cap_str = "8G";
+	}
+	else if(cap_in_MB > 14 * 1024u && cap_in_MB < 17 * 1024u)
+	{
+		cap_str = "16G";
+	}
+	else if(cap_in_MB > 29 * 1024u && cap_in_MB < 33 * 1024u)
+	{
+		cap_str = "32G";
+	}
+	else if(cap_in_MB > 59 * 1024u && cap_in_MB < 65 * 1024u)
+	{
+		cap_str = "64G";
+	}
+
+	seq_printf(s, "%s eMMC %s %s Prod_V%u\n", manuf_name, cap_str, emmc_info->product_name, emmc_info->prod_rev);
+}
+
+void oem_get_soc_info_str(struct seq_file *s, uint32_t msm_hw_revision)
+{
+	const char* soc_type = "UNKNOWN";
+	uint32_t part_num = (msm_hw_revision >> 12) & 0xFFFF;
+
+	switch(part_num)
+	{
+		case 0x705:
+			soc_type = "MSM8916";
+			break;
+		case 0x706:
+			soc_type = "APQ8016";
+			break;
+		case 0x707:
+			soc_type = "MSM8216";
+			break;
+		case 0x708:
+			soc_type = "MSM8116";
+			break;
+		case 0x709:
+			soc_type = "MSM8616";
+			break;
+		case 0x90A:
+			soc_type = "MSM8936";
+			break;
+		case 0x90B:
+			soc_type = "MSM8939";
+			break;
+		case 0x90C:
+			soc_type = "APQ8036";
+			break;
+		case 0x90D:
+			soc_type = "APQ8039";
+			break;
+		case 0x90E:
+			soc_type = "MSM8236";
+			break;
+		case 0x90F:
+			soc_type = "MSM8636";
+			break;
+		case 0x957:
+			soc_type = "MSM8239";
+			break;
+	}
+
+	seq_printf(s, "SOC: %s Rev.%08X\n", soc_type, msm_hw_revision);
+}
+
+void oem_get_sku_id_str(struct seq_file *s, uint32_t sku_id)
+{
+	static const char* sku_id_str[] =
+	{
+		"A(WW)", "B(TW/JP)", "C(CN5/IN)", "D(New CN)"
+	};
+
+	const char* sku_info = "UNKNOWN";
+
+	if(sku_id < sizeof(sku_id_str) / sizeof(sku_id_str[0]))
+		sku_info = sku_id_str[sku_id];
+
+	seq_printf(s, "RF HW SKU: %s\n", sku_info);
+}
+
+
+static int soc_boot_info_show(struct seq_file *s, void *unused)
+{
+	struct oem_shared_info* hardware_info = msm_get_hardware_info();
+	if(hardware_info != NULL)
+	{
+		oem_get_ddr_info_str(s, &hardware_info->ddr[0]);
+		oem_get_emmc_info_str(s, &hardware_info->emmc);
+		oem_get_soc_info_str(s, hardware_info->msm_hw_revision);
+		oem_get_sku_id_str(s, get_rf_sku_id());
+		seq_printf(s, "\nSECURE BOOT: %s\n\n", hardware_info->auth_enabled ? "TRUE" : "FALSE");
+	}
+
+	msm_get_boot_image_version(s, 0, "SBL", true);
+	msm_get_boot_image_version(s, 1, "TZ", true);
+	msm_get_boot_image_version(s, 3, "RPM", true);
+	msm_get_boot_image_version(s, 9, "ABOOT", true);
+	msm_get_boot_image_version(s, 11, "MPSS", false);
+	msm_get_boot_image_version(s, 13, "WCNSS", false);
+	return 0;
+}
+
+static int soc_boot_info_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, soc_boot_info_show, NULL);
+}
+
+static const struct file_operations soc_boot_info_fops = {
+	.open		= soc_boot_info_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
+static int __init soc_boot_info_proc_init(void)
+{
+	proc_create_data("bootinfo", S_IRUSR | S_IRGRP,
+			NULL, &soc_boot_info_fops, NULL);
+	return 0;
+}
+late_initcall(soc_boot_info_proc_init);
+#endif //ASUS_ZC550KL_PROJECT
+//ASUS BSP: Enter_Zhang---
+
+

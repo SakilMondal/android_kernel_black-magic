@@ -108,6 +108,13 @@ enum mdp_mmap_type {
 	MDP_FB_MMAP_PHYSICAL_ALLOC,
 };
 
+//ASUS_BSP: Louis ++
+struct uevent_type {
+	char *cmdstr;
+	char *ptr;
+};
+//ASUS_BSP: Louis --
+
 struct disp_info_type_suspend {
 	int op_enable;
 	int panel_power_state;

@@ -932,6 +932,17 @@ first_try:
 					pr_err("less data(%zd) recieved than intended length(%zu)\n",
 								ret, len);
 				if (ret > len) {
+					// ASUS BSP +++ Add log for monitoring endpoint buffer overflow
+					#if defined(CONFIG_ASUS_EVT_LOG)
+						ASUSEvtlog("[USB] FFS OVERFLOW (%zd %zu)\n",ret , len);
+						if (ep->ep)
+							ASUSEvtlog("[USB] FFS EP (%s %d)",ep->ep->name, ep->ep->address);
+					#endif
+					pr_err("[USB] FFS OVERFLOW (%zd %zu)\n",ret , len);
+					if (ep->ep)
+							pr_err("[USB] FFS EP (%s %d)",ep->ep->name, ep->ep->address);
+					dump_stack();
+					// ASUS BSP --- Add log for monitoring endpoint buffer overflow
 					ret = -EOVERFLOW;
 					pr_err("More data(%zd) recieved than intended length(%zu)\n",
 								ret, len);
