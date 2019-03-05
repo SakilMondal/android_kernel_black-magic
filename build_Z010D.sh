@@ -10,7 +10,7 @@ nocol='\033[0m'
 
 # Kernel details
 KERNEL_NAME="BlackMagic™"
-VERSION="R2"
+VERSION="N"
 DATE=$(date +"%d-%m-%Y-%I-%M")
 DEVICE="Z010D"
 FINAL_ZIP=$KERNEL_NAME-$VERSION-$DATE-$DEVICE.zip
