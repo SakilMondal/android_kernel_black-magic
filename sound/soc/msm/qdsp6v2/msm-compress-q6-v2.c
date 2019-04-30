@@ -1496,6 +1496,7 @@ static int msm_compr_playback_free(struct snd_compr_stream *cstream)
 		pdata->dec_params[soc_prtd->dai_link->be_id] = NULL;
 	}
 	pdata->is_in_use[soc_prtd->dai_link->be_id] = false;
+<<<<<<< HEAD
 	kfree(prtd);
 	runtime->private_data = NULL;
 
@@ -1562,6 +1563,8 @@ static int msm_compr_capture_free(struct snd_compr_stream *cstream)
 
 	q6asm_audio_client_free(ac);
 
+=======
+>>>>>>> LA.BR.1.2.9.1-01910-8x16.0
 	kfree(prtd);
 	runtime->private_data = NULL;
 

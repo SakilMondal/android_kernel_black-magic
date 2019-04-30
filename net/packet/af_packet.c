@@ -1377,6 +1377,7 @@ static struct packet_fanout *fanout_release(struct sock *sk)
 	struct packet_sock *po = pkt_sk(sk);
 	struct packet_fanout *f;
 
+<<<<<<< HEAD
 	f = po->fanout;
 	if (!f) return NULL;
 
@@ -1385,6 +1386,19 @@ static struct packet_fanout *fanout_release(struct sock *sk)
 	else
 		f = NULL;
 
+=======
+	mutex_lock(&fanout_mutex);
+	f = po->fanout;
+	if (f) {
+		po->fanout = NULL;
+
+		if (atomic_dec_and_test(&f->sk_ref)) {
+			list_del(&f->list);
+			dev_remove_pack(&f->prot_hook);
+			kfree(f);
+		}
+	}
+>>>>>>> LA.BR.1.2.9.1-01910-8x16.0
 	mutex_unlock(&fanout_mutex);
 
 	return f;
