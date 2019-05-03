@@ -2231,13 +2231,11 @@ static int ap3426_probe(struct i2c_client *client,
 	goto exit_free_heartbeats_device;
     }
     /* register sysfs hooks */
-    if (err)
-	{
+    if (err) {
 	goto exit_free_ps_device;
 	
 	printk("[alian][PLSensor] gpio_request int_pin=%d\n", data->int_pin); 
 	}
-
     err = gpio_request(data->int_pin,"ap3426-int");
     if(err < 0)
     {
@@ -2341,12 +2339,11 @@ static int ap3426_probe(struct i2c_client *client,
     device_init_wakeup(&client->dev, true);
 
 
-   if (err)
-	{
-	goto err_power_ctl;
+    if (err)
+		goto err_power_ctl;
 
-	data->als_cdev = sensors_light_cdev;} 
- 	data->als_cdev.sensors_enable = ap3426_als_enable_set; 
+	data->als_cdev = sensors_light_cdev; 
+	data->als_cdev.sensors_enable = ap3426_als_enable_set; 
  	data->als_cdev.sensors_poll_delay = ap3426_als_poll_delay_set; 
  	err = sensors_classdev_register(&client->dev, &data->als_cdev); 
  	if (err) 
